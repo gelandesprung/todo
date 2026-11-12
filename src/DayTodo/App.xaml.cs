@@ -5,11 +5,12 @@ using System.Windows.Threading;
 using DayTodo.Mcp;
 using DayTodo.Services;
 using DayTodo.ViewModels;
+using DayTodo.Views;
 using WinForms = System.Windows.Forms;
 
 namespace DayTodo;
 
-public partial class App : Application
+public partial class App : Application, ISettingsHost
 {
     private static Mutex? _mutex;
     private static EventWaitHandle? _activateEvent;
@@ -19,15 +20,38 @@ public partial class App : Application
     private MainWindow? _window;
     private MainViewModel? _vm;
     private bool _forceExit;
+    private bool _shuttingDown;
+
     private McpSettings _mcpSettings = new();
+    private AppSettings _appSettings = new();
     private McpServer? _mcpServer;
     private McpHttpHost? _mcpHost;
-    private WinForms.ToolStripMenuItem? _mcpMenuItem;
+    private string _mcpError = string.Empty;
+    private Views.SettingsWindow? _settingsWindow;
 
     public bool ForceExit => _forceExit;
 
     /// <summary>True only when the listener is actually running (switch state alone is not enough).</summary>
     public bool McpEnabled => _mcpHost?.IsRunning == true;
+
+    // ---- ISettingsHost ----
+
+    public AppSettings Settings => _appSettings;
+
+    public McpSettings McpSettings => _mcpSettings;
+
+    public bool McpRunning => McpEnabled;
+
+    /// <summary>What the service is really doing right now, shown under the switches.</summary>
+    public string McpStatusText
+    {
+        get
+        {
+            if (McpEnabled) return $"运行中 · 127.0.0.1:{_mcpSettings.Port}/mcp";
+            if (!string.IsNullOrEmpty(_mcpError)) return "启动失败：" + _mcpError;
+            return "已停止 · AI 客户端连不上";
+        }
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -60,12 +84,14 @@ public partial class App : Application
             var moved = RolloverService.Run(data, DateUtil.Today());
             DataStore.Save(data);
 
+            _appSettings = AppSettings.Load();
+            _mcpSettings = McpSettings.Load();
+
             _window = new MainWindow();
             _vm = new MainViewModel(data, ShowBalloon, _window.PickMoveDate);
             _window.DataContext = _vm;
             MainWindow = _window;
 
-            _mcpSettings = McpSettings.Load();
             _mcpServer = new McpServer(new McpTaskService(data, Dispatcher,
                 () => _vm!.CommitExternalChange()));
 
@@ -141,6 +167,63 @@ public partial class App : Application
                     catch (Exception ex) { log.AppendLine("ROLLBACK-ERROR " + ex.Message); }
                 }
 
+                // The settings dialog is a second binding surface: show it once so a
+                // broken binding inside it surfaces here instead of at the user's desk.
+                SettingsViewModel? settingsVm = null;
+                try
+                {
+                    var settingsWin = new Views.SettingsWindow();
+                    settingsVm = new SettingsViewModel(this, null);
+                    settingsWin.DataContext = settingsVm;
+                    settingsWin.Show();
+                    settingsWin.UpdateLayout();
+                    log.AppendLine("SettingsAutoStart=" + settingsVm.AutoStartEnabled);
+                    log.AppendLine("SettingsMcpEnabled=" + settingsVm.McpEnabled);
+                    log.AppendLine("SettingsPort=" + settingsVm.McpPortText);
+                    log.AppendLine("SettingsEndpoint=" + settingsVm.McpEndpoint);
+                    log.AppendLine("SettingsStatus=" + settingsVm.McpStatusText);
+                    log.AppendLine("SettingsVersion=" + settingsVm.VersionText);
+                    settingsWin.Close();
+                }
+                catch (Exception ex)
+                {
+                    log.AppendLine("SETTINGS-ERROR " + ex.Message);
+                }
+
+                // Exercise the settings actions for real: change the port and the token
+                // and check the listener follows. Everything is restored afterwards.
+                if (settingsVm != null)
+                {
+                    try
+                    {
+                        var savedPort = _mcpSettings.Port;
+                        var savedToken = _mcpSettings.Token;
+
+                        settingsVm.McpPortText = (savedPort + 1).ToString();
+                        settingsVm.CommitPort();
+                        log.AppendLine("PortApplied=" + (_mcpSettings.Port == savedPort + 1));
+                        log.AppendLine("PortListenerMoved=" + PortListening(savedPort + 1));
+                        log.AppendLine("OldPortClosed=" + !PortListening(savedPort));
+
+                        settingsVm.McpToken = "verify-token";
+                        settingsVm.CommitToken();
+                        log.AppendLine("TokenApplied=" + (_mcpSettings.Token == "verify-token"));
+                        log.AppendLine("TokenRejectsAnonymous=" + (McpHttpStatus(savedPort + 1, null) == 401));
+                        log.AppendLine("TokenAcceptsBearer=" + (McpHttpStatus(savedPort + 1, "verify-token") == 200));
+
+                        settingsVm.McpPortText = savedPort.ToString();
+                        settingsVm.CommitPort();
+                        settingsVm.McpToken = savedToken;
+                        settingsVm.CommitToken();
+                        log.AppendLine("PortRestored=" + (_mcpSettings.Port == savedPort));
+                        log.AppendLine("TokenRestored=" + (_mcpSettings.Token == savedToken));
+                    }
+                    catch (Exception ex)
+                    {
+                        log.AppendLine("SETTINGS-ACTION-ERROR " + ex.Message);
+                    }
+                }
+
                 System.IO.File.WriteAllText(marker, log.ToString());
                 Shutdown();
             }
@@ -179,27 +262,10 @@ public partial class App : Application
                 _tray.Icon = _trayIcon;
             }
 
+            // The tray only carries navigation: everything else lives in the settings dialog.
             var menu = new WinForms.ContextMenuStrip();
             menu.Items.Add("显示主窗口", null, (_, _) => ShowMainWindow());
-
-            var auto = new WinForms.ToolStripMenuItem("开机自启")
-            {
-                Checked = StartupService.IsEnabled(),
-                CheckOnClick = true
-            };
-            auto.CheckedChanged += (_, _) => StartupService.SetEnabled(auto.Checked);
-            menu.Items.Add(auto);
-
-            _mcpMenuItem = new WinForms.ToolStripMenuItem("启用 MCP 服务")
-            {
-                CheckOnClick = false,
-                Checked = McpEnabled
-            };
-            _mcpMenuItem.Click += (_, _) => SetMcpEnabled(!McpEnabled);
-            menu.Items.Add(_mcpMenuItem);
-
-            menu.Items.Add(new WinForms.ToolStripSeparator());
-            menu.Items.Add("打开记录所在位置", null, (_, _) => _vm?.OpenDataFolderCommand.Execute(null));
+            menu.Items.Add("设置…", null, (_, _) => OpenSettings());
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("退出", null, (_, _) => ExitApp());
 
@@ -237,9 +303,35 @@ public partial class App : Application
         });
     }
 
+    /// <summary>Opens (or focuses) the settings dialog.</summary>
+    public void OpenSettings()
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (_settingsWindow == null)
+            {
+                _settingsWindow = new Views.SettingsWindow
+                {
+                    WindowStartupLocation = WindowStartupLocation.CenterScreen
+                };
+                _settingsWindow.DataContext = new SettingsViewModel(this, ShowBalloon);
+                _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+            }
+
+            _settingsWindow.Show();
+            if (_settingsWindow.WindowState == WindowState.Minimized)
+                _settingsWindow.WindowState = WindowState.Normal;
+            _settingsWindow.Activate();
+            _settingsWindow.Topmost = true;
+            _settingsWindow.Topmost = false;
+            _settingsWindow.Focus();
+        });
+    }
+
     public void ExitApp()
     {
         _forceExit = true;
+        _shuttingDown = true;
         try { _tray?.Dispose(); }
         catch (Exception) { }
         try { _window?.Close(); }
@@ -278,10 +370,12 @@ public partial class App : Application
             var host = new McpHttpHost(_mcpServer, _mcpSettings.Port, token);
             host.Start();
             _mcpHost = host;
+            _mcpError = string.Empty;
         }
         catch (Exception ex)
         {
-            // Port taken or no permission: the app keeps working, the switch shows off.
+            // Port taken or no permission: the app keeps working, the status line explains.
+            _mcpError = ex.Message;
             System.Diagnostics.Debug.WriteLine("DayTodo MCP 启动失败：" + ex.Message);
         }
     }
@@ -293,28 +387,99 @@ public partial class App : Application
         _mcpHost = null;
     }
 
-    /// <summary>Toggled from the window switch or the tray menu; the choice is persisted.</summary>
+    /// <summary>Toggled from the sidebar switch or the settings dialog; the choice is persisted.</summary>
     public void SetMcpEnabled(bool enabled)
     {
         _mcpSettings.Enabled = enabled;
         McpSettings.Save(_mcpSettings);
         if (enabled) StartMcp();
-        else StopMcp();
+        else { StopMcp(); _mcpError = string.Empty; }
         SyncMcpUi();
+    }
+
+    /// <summary>Applies a new port and restarts the listener so the change takes effect now.</summary>
+    public void ApplyMcpPort(int port)
+    {
+        if (port < 1 || port > 65535) return;
+        if (_mcpSettings.Port == port) return;
+        _mcpSettings.Port = port;
+        McpSettings.Save(_mcpSettings);
+        RestartMcp();
+        SyncMcpUi();
+    }
+
+    /// <summary>Applies a new access token and restarts the listener.</summary>
+    public void ApplyMcpToken(string token)
+    {
+        token ??= string.Empty;
+        if (_mcpSettings.Token == token) return;
+        _mcpSettings.Token = token;
+        McpSettings.Save(_mcpSettings);
+        RestartMcp();
+        SyncMcpUi();
+    }
+
+    /// <summary>Whether the close button hides to the tray (true) or quits for real (false).</summary>
+    public void SetMinimizeToTrayOnClose(bool value)
+    {
+        if (_appSettings.MinimizeToTrayOnClose == value) return;
+        _appSettings.MinimizeToTrayOnClose = value;
+        AppSettings.Save(_appSettings);
+    }
+
+    private void RestartMcp()
+    {
+        if (!_mcpSettings.Enabled || _shuttingDown) return;
+        StopMcp();
+        StartMcp();
     }
 
     private void SyncMcpUi()
     {
-        var on = McpEnabled;
+        var on = _mcpSettings.Enabled;
+        var status = McpStatusText;
         Dispatcher.Invoke(() =>
         {
-            if (_mcpMenuItem != null) _mcpMenuItem.Checked = on;
-            _window?.SyncMcpSwitch(on);
+            _window?.SyncMcpState(on, status);
+            (_settingsWindow?.DataContext as SettingsViewModel)?.Refresh();
         });
+    }
+
+    /// <summary>True when something accepts connections on the given loopback port.</summary>
+    private static bool PortListening(int port)
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            var connected = client.ConnectAsync(System.Net.IPAddress.Loopback, port).Wait(1500);
+            return connected && client.Connected;
+        }
+        catch (Exception) { return false; }
+    }
+
+    /// <summary>Posts a ping to the local MCP endpoint and returns the HTTP status code.</summary>
+    private static int McpHttpStatus(int port, string? token)
+    {
+        try
+        {
+            using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var request = new System.Net.Http.HttpRequestMessage(
+                System.Net.Http.HttpMethod.Post, $"http://127.0.0.1:{port}/mcp");
+            request.Content = new System.Net.Http.StringContent(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+                System.Text.Encoding.UTF8, "application/json");
+            if (!string.IsNullOrEmpty(token))
+                request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token);
+
+            using var response = client.SendAsync(request).GetAwaiter().GetResult();
+            return (int)response.StatusCode;
+        }
+        catch (Exception) { return 0; }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _shuttingDown = true;
         StopMcp();
         try { _tray?.Dispose(); } catch (Exception) { }
         try { _trayIcon?.Dispose(); } catch (Exception) { }

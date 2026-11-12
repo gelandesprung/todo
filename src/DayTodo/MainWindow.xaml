@@ -125,6 +125,19 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
+                    <Button Style="{StaticResource TitleBarButton}" Click="Settings_Click" ToolTip="设置">
+                        <Canvas Width="14" Height="14">
+                            <Rectangle Canvas.Left="0" Canvas.Top="2" Width="14" Height="1.3" Fill="#5F5E5A" />
+                            <Rectangle Canvas.Left="0" Canvas.Top="6.4" Width="14" Height="1.3" Fill="#5F5E5A" />
+                            <Rectangle Canvas.Left="0" Canvas.Top="10.8" Width="14" Height="1.3" Fill="#5F5E5A" />
+                            <Border Canvas.Left="3" Canvas.Top="0.4" Width="2.6" Height="4.5"
+                                    CornerRadius="1.3" Background="#5F5E5A" />
+                            <Border Canvas.Left="8" Canvas.Top="4.8" Width="2.6" Height="4.5"
+                                    CornerRadius="1.3" Background="#5F5E5A" />
+                            <Border Canvas.Left="5" Canvas.Top="9.2" Width="2.6" Height="4.5"
+                                    CornerRadius="1.3" Background="#5F5E5A" />
+                        </Canvas>
+                    </Button>
                     <Button Style="{StaticResource TitleBarButton}" Click="Minimize_Click" ToolTip="最小化">
                         <Rectangle Width="11" Height="1" Fill="#5F5E5A" />
                     </Button>
@@ -222,29 +235,27 @@
 
                         <StackPanel Grid.Row="3" VerticalAlignment="Bottom">
                             <Rectangle Height="0.5" Fill="#E8E6E0" />
-                            <CheckBox Margin="2,10,0,0" Content="开机自启" FontSize="11.5"
-                                      Foreground="{StaticResource TextSecondary}"
-                                      IsChecked="{Binding AutoStartEnabled, Mode=TwoWay}" />
-                            <TextBlock Margin="2,8,0,0" FontSize="10.5" Foreground="{StaticResource TextMuted}"
-                                       TextWrapping="Wrap"
-                                       Text="关闭窗口后最小化到托盘，任务不会丢" />
 
-                            <CheckBox x:Name="McpSwitch" Margin="2,12,0,0" Content="启用 MCP 服务"
-                                      FontSize="11.5" Foreground="{StaticResource TextSecondary}"
-                                      Checked="McpSwitch_Changed" Unchecked="McpSwitch_Changed"
-                                      ToolTip="开启后 AI 客户端可通过 http://127.0.0.1:8765/mcp 创建任务" />
-                            <TextBlock Margin="2,4,0,0" FontSize="10" Foreground="{StaticResource TextMuted}"
-                                       TextWrapping="Wrap" Text="AI 客户端可在本机 8765 端口创建任务" />
-
-                            <Rectangle Height="0.5" Fill="#E8E6E0" Margin="0,12,0,0" />
-                            <TextBlock Text="记录数据" FontSize="11" Foreground="{StaticResource TextMuted}"
-                                       Margin="2,10,0,7" />
-                            <Button Content="打开记录所在位置" Style="{StaticResource SubtleButton}"
-                                    HorizontalAlignment="Stretch"
-                                    Command="{Binding OpenDataFolderCommand}"
-                                    ToolTip="在资源管理器中定位 tasks.json（同目录还有 backups 备份）" />
-                            <TextBlock Margin="2,6,0,0" FontSize="10" Foreground="{StaticResource TextMuted}"
-                                       TextWrapping="Wrap" Text="%APPDATA%\DayTodo\tasks.json" />
+                            <!-- 左栏只保留一件事：MCP 服务。其余操作都收进了「设置」。 -->
+                            <Border Margin="2,12,0,0" Background="#FFFFFF" BorderBrush="#E3E1DA"
+                                    BorderThickness="0.5" CornerRadius="8" Padding="10,9">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,10,0">
+                                        <TextBlock Text="MCP 服务" FontSize="11.5"
+                                                   Foreground="{StaticResource TextPrimary}" />
+                                        <TextBlock Text="{Binding McpStatusText}" FontSize="10" Margin="0,3,0,0"
+                                                   Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <CheckBox x:Name="McpSwitch" Grid.Column="1"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              Checked="McpSwitch_Changed" Unchecked="McpSwitch_Changed"
+                                              ToolTip="开启后 AI 客户端可通过 http://127.0.0.1:8765/mcp 创建任务" />
+                                </Grid>
+                            </Border>
                         </StackPanel>
                     </Grid>
                 </Border>

@@ -1,5 +1,5 @@
 ﻿#define MyAppName "DayTodo 日清单"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyAppExeName "DayTodo.exe"
 #define MyAppPublisher "DayTodo"
 
@@ -16,7 +16,7 @@ DisableWelcomePage=no
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\dist\installer
-OutputBaseFilename=DayTodo-Setup-1.0.2
+OutputBaseFilename=DayTodo-Setup-1.0.3
 SetupIconFile=..\src\DayTodo\Assets\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}

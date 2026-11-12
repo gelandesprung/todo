@@ -18,10 +18,11 @@
 | 历史只读 | 选中今天之前的日期时，不能新增、勾选、删除 |
 | 删除 | 硬删除，点「删除」立即移除，不进回收站、不可恢复 |
 | 改期移动 | 任务行「改期」可移到今天或未来任意一天；未来任务行多一个「拉回今天」，一键移回 |
-| 记录位置 | 左下角「打开记录所在位置」或托盘右键，直接在资源管理器里选中 `tasks.json` |
+| 设置面板 | 标题栏齿轮或托盘「设置…」打开；开机自启、托盘行为、MCP 端口与令牌、数据目录、关于全部收在这里 |
+| 记录位置 | 设置 →「打开记录所在位置」，在资源管理器里选中 `tasks.json`（同目录还有 `backups` 备份） |
 | 标签 / 优先级 | 标签逗号分隔最多 4 个；高 / 中 / 低三级，列表按未完成优先、再按优先级排序 |
-| 托盘常驻 | 关闭窗口只隐藏到托盘，双击托盘图标恢复；右键可退出 / 开关开机自启 |
-| 开机自启 | 写 `HKCU\...\Run`，带 `--minimized` 参数，启动后直接进托盘 |
+| 托盘常驻 | 关闭窗口只隐藏到托盘，双击托盘图标恢复；托盘菜单只剩「显示主窗口 / 设置… / 退出」 |
+| 开机自启 | 设置里开关，写 `HKCU\...\Run`，带 `--minimized` 参数，启动后直接进托盘 |
 | 单实例 | 第二次启动时激活已有窗口，不重复开进程 |
 
 ## 目录结构
@@ -33,12 +34,15 @@ D:\workbuddy\todo\
 │  ├─ app.manifest            DPI 感知、asInvoker、Win10/11 兼容声明
 │  ├─ App.xaml / .cs          启动、单实例、托盘、全局异常处理
 │  ├─ MainWindow.xaml / .cs  主窗口、标题栏、改期日期选择、跨零点定时器
+│  ├─ Views\SettingsWindow.*  设置面板（通用 / MCP 服务 / 数据 / 关于）
 │  ├─ Assets\app.ico          exe / 安装包图标（16/32/48/256 四档）
 │  ├─ Assets\tray.png         托盘图标（内嵌资源）
-│  ├─ Themes\Styles.xaml      浅色画刷与控件样式
+│  ├─ Themes\Styles.xaml      浅色画刷与控件样式（含设置面板用开关）
 │  ├─ Models\Entities.cs      TaskItem / AppData
 │  ├─ Services\Services.cs    JSON 存储、顺延引擎、改期、开机自启、数据位置
+│  ├─ Services\AppSettings.cs 应用偏好（关闭窗口是否最小化到托盘）
 │  ├─ ViewModels\ViewModel.cs MVVM 视图模型与命令
+│  ├─ ViewModels\SettingsViewModel.cs 设置面板视图模型
 │  └─ Mcp\                    内嵌 MCP 服务：协议 / HTTP / 数据 / 开关设置
 ├─ build\
 │  ├─ make-icon.ps1          生成多尺寸 ico + 托盘 png
@@ -46,7 +50,7 @@ D:\workbuddy\todo\
 │  └─ installer.iss          Inno Setup 6 脚本（当前用户安装）
 ├─ dist\
 │  ├─ portable\DayTodo.exe   单文件便携版
-│  └─ installer\DayTodo-Setup-1.0.2.exe
+│  └─ installer\DayTodo-Setup-1.0.3.exe
 └─ README.md
 ```
 
@@ -54,10 +58,12 @@ D:\workbuddy\todo\
 
 - 主数据：`%APPDATA%\DayTodo\tasks.json`（UTF-8，中文不转义，可直接用记事本看）
 - 备份：同目录 `backups\tasks-yyyyMMdd-HHmm.json`，自动保留最近 7 份
+- 应用偏好：`%APPDATA%\DayTodo\app-settings.json`（关闭窗口是否最小化到托盘）
+- MCP 开关：`%APPDATA%\DayTodo\mcp-settings.json`（启用状态、端口、访问令牌）
 - 写入方式：先写 `.tmp` 再原子替换，断电不会写坏主文件
 - 文件损坏时：自动改名为 `tasks.corrupt-*.json`，并从最新备份恢复
 - **卸载程序不会删除任务数据**；需要彻底清除请手动删 `%APPDATA%\DayTodo`
-- 找记录：左下角「打开记录所在位置」或托盘右键同名菜单，会在资源管理器里选中 `tasks.json`（同目录还有 `backups` 备份）；想导出/备份直接复制这个文件即可
+- 找记录：设置 →「打开记录所在位置」或「打开备份目录」，会在资源管理器里定位 `tasks.json`；想导出/备份直接复制这个文件即可
 
 ### 任务字段与顺延规则
 
@@ -161,7 +167,16 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 
 报告里应出现 `CanAdd=True`、`AddButtonEnabled=True`、`EnterHandled=True`，且 `TasksAfterEnter` 比运行前多 1；若启动期抛异常（弹「启动失败」），标记文件不会生成。
 
-版本记录：1.0.1 修掉启动期绑定异常（`ProgressBar.Value` 默认双向绑定，绑定到只读计算属性 `Progress` 时 WPF 尝试回写并抛异常，已改为 `Mode=OneWay`）；1.0.2 重做添加栏（带边框的长输入框、框内提示文字、回车与按钮双通道），并把自检扩展为端到端交互测试。
+自检还会**真实显示一次设置面板**并跑一遍设置动作，确认绑定与热更新都没坏：
+
+| 报告字段 | 含义 |
+|---|---|
+| `SettingsAutoStart` / `SettingsMcpEnabled` / `SettingsPort` / `SettingsEndpoint` / `SettingsStatus` | 设置面板各字段是否正确绑定 |
+| `PortApplied` / `PortListenerMoved` / `OldPortClosed` | 改端口后监听器是否真的搬到新端口、旧端口是否释放 |
+| `TokenRejectsAnonymous` / `TokenAcceptsBearer` | 加令牌后无令牌 401、带令牌 200 |
+| `PortRestored` / `TokenRestored` | 自检结束后端口与令牌是否恢复原值 |
+
+版本记录：1.0.1 修掉启动期绑定异常（`ProgressBar.Value` 默认双向绑定，绑定到只读计算属性 `Progress` 时 WPF 尝试回写并抛异常，已改为 `Mode=OneWay`）；1.0.2 重做添加栏（带边框的长输入框、框内提示文字、回车与按钮双通道），并把自检扩展为端到端交互测试；1.0.3 抽出设置面板，开机自启 / 记录位置 / MCP 端口令牌等操作全部收进设置，主界面左栏只留 MCP 服务一项。
 
 测试清单：
 
@@ -169,12 +184,16 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 2. 关窗口 → 托盘图标仍在 → 双击恢复
 3. 改系统日期到明天（或等跨零点）→ 未完成任务自动出现在新的一天，带「顺延 N 天」
 4. 回到历史日 → 显示「未完成 · 已顺延至今天」，添加栏与删除按钮消失，勾选无效
-5. 勾选开机自启 → 检查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+5. 设置 → 开机自启 → 检查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 6. 重复双击 exe → 只激活已有窗口，不出现第二个进程
 7. 手动改坏 `tasks.json` → 启动后自动隔离并从备份恢复
 8. 在中文用户名 / 带空格路径下安装运行
 9. 今天的任务点「改期」选下周某天 → 今天列表里消失 → 翻到那天能看到 → 点「拉回今天」→ 回到今天
-10. 点「打开记录所在位置」→ 资源管理器选中 `tasks.json`；托盘右键同名菜单也能用
+10. 设置 →「打开记录所在位置」→ 资源管理器选中 `tasks.json`；「打开备份目录」能看到 7 份滚动备份
+11. 设置 → 改 MCP 端口为 8766 → 立刻监听新端口、8765 释放；改回 8765 恢复
+12. 设置 → 填访问令牌 → 无令牌的客户端请求 401、带 `Bearer <令牌>` 才通
+13. 设置 → 关掉「关闭窗口时最小化到托盘」→ 点关闭按钮应用直接退出；打开则缩回托盘
+14. 主界面左栏只剩 MCP 服务一项，标题栏齿轮与托盘「设置…」都能打开设置面板
 
 常见坑：
 
@@ -192,7 +211,18 @@ MCP 服务**内嵌在 DayTodo 主程序里**：应用启动后自动在 `http://
 
 ### 界面开关
 
-左栏「开机自启」下方有「启用 MCP 服务」勾选框，托盘右键菜单里也有同名勾选项。关掉即停止监听，再打开即重新启动；状态保存在 `%APPDATA%\DayTodo\mcp-settings.json`，下次启动沿用（默认开启）。
+左栏底部只剩一张 **MCP 服务**卡片：一个开关加一行状态（运行中 / 已停止 / 启动失败）。这是主界面上唯一保留的功能开关，其余操作都收进了设置面板 —— 标题栏齿轮按钮或托盘「设置…」都能打开。
+
+设置面板分四块：
+
+| 分区 | 内容 |
+|---|---|
+| 通用 | 开机自启（写 `HKCU\...\Run`）、关闭窗口时最小化到托盘 |
+| MCP 服务 | 启用开关、端口、访问令牌、连接地址（一键复制） |
+| 数据 | 打开记录所在位置、打开备份目录、数据路径 |
+| 关于 | 版本号、退出 DayTodo |
+
+端口与令牌**改完即生效**：设置窗口会立刻重启监听器（无令牌时放行，带令牌时校验 `Authorization: Bearer <令牌>`），状态保存在 `%APPDATA%\DayTodo\mcp-settings.json`，下次启动沿用（默认开启）。
 
 ```json
 {

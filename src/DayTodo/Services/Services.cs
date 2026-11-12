@@ -246,6 +246,8 @@ public static class TaskScheduleService
 /// <summary>Reveals the raw task data file in Explorer.</summary>
 public static class DataLocationService
 {
+    public static string BackupDir => Path.Combine(DataStore.DataDir, "backups");
+
     /// <summary>Opens Explorer and selects tasks.json (or just the folder if it doesn't exist yet).</summary>
     public static void OpenDataLocation()
     {
@@ -257,6 +259,19 @@ public static class DataLocationService
             Arguments = File.Exists(DataStore.DataFilePath)
                 ? "/select,\"" + DataStore.DataFilePath + "\""
                 : "\"" + DataStore.DataDir + "\""
+        };
+        Process.Start(psi);
+    }
+
+    /// <summary>Opens the rolling backup folder (one file per save, 7 kept).</summary>
+    public static void OpenBackupLocation()
+    {
+        Directory.CreateDirectory(BackupDir);
+        var psi = new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            UseShellExecute = true,
+            Arguments = "\"" + BackupDir + "\""
         };
         Process.Start(psi);
     }

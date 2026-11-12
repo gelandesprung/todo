@@ -79,7 +79,6 @@ public sealed class MainViewModel : ObservableObject
     public ICommand TodayCommand { get; }
     public ICommand AddCommand { get; }
     public ICommand SetPriorityCommand { get; }
-    public ICommand OpenDataFolderCommand { get; }
     public ICommand GoToFutureCommand { get; }
 
     public MainViewModel(AppData data, Action<string>? notify = null,
@@ -94,7 +93,6 @@ public sealed class MainViewModel : ObservableObject
         TodayCommand = new RelayCommand(_ => SetSelectedDate(DateTime.Today));
         AddCommand = new RelayCommand(_ => AddTask());
         SetPriorityCommand = new RelayCommand(p => SetPriority(p));
-        OpenDataFolderCommand = new RelayCommand(_ => OpenDataFolder());
         GoToFutureCommand = new RelayCommand(_ => GoToFuture());
 
         Rebuild();
@@ -124,15 +122,17 @@ public sealed class MainViewModel : ObservableObject
 
     public bool CanEdit => !IsHistory;
 
-    public bool AutoStartEnabled
+    /// <summary>Runtime state of the MCP service, shown under the sidebar switch.</summary>
+    public string McpStatusText
     {
-        get => StartupService.IsEnabled();
-        set
-        {
-            StartupService.SetEnabled(value);
-            OnPropertyChanged();
-        }
+        get => _mcpStatusText;
+        set => Set(ref _mcpStatusText, value);
     }
+
+    private string _mcpStatusText = "已停止";
+
+    /// <summary>Called by the shell whenever the MCP service state changes.</summary>
+    public void SetMcpStatus(string text) => McpStatusText = text;
 
     public string NewTitle
     {
@@ -304,20 +304,6 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>An MCP tool changed the shared data; persist and refresh like a user action.</summary>
     public void CommitExternalChange() => Commit();
-
-    /// <summary>Reveal tasks.json in Explorer so the raw records can be copied or inspected.</summary>
-    private void OpenDataFolder()
-    {
-        try
-        {
-            DataLocationService.OpenDataLocation();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show("打开记录位置失败：" + ex.Message, "DayTodo 日清单",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
 
     /// <summary>Called when the system date rolls over while the app is running.</summary>
     public void OnNewDay()

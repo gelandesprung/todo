@@ -19,20 +19,27 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        Loaded += (_, _) => SyncMcpSwitch(
-            (System.Windows.Application.Current as App)?.McpEnabled ?? false);
+        Loaded += (_, _) =>
+        {
+            var app = System.Windows.Application.Current as App;
+            SyncMcpState(app?.McpSettings.Enabled ?? false, app?.McpStatusText ?? "已停止");
+        };
 
         _dateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
         _dateTimer.Tick += (_, _) => CheckDateChange();
         _dateTimer.Start();
     }
 
-    /// <summary>Also called by App when the service is toggled from the tray menu.</summary>
-    public void SyncMcpSwitch(bool enabled)
+    /// <summary>
+    /// Keeps the single sidebar switch in sync with the shell (tray menu, settings dialog).
+    /// The switch shows the saved intent, the status line shows what is really running.
+    /// </summary>
+    public void SyncMcpState(bool enabled, string status)
     {
         _mcpSwitchSyncing = true;
         McpSwitch.IsChecked = enabled;
         _mcpSwitchSyncing = false;
+        (DataContext as MainViewModel)?.SetMcpStatus(status);
     }
 
     private void McpSwitch_Changed(object sender, RoutedEventArgs e)
@@ -40,6 +47,10 @@ public partial class MainWindow : Window
         if (_mcpSwitchSyncing) return;
         (System.Windows.Application.Current as App)?.SetMcpEnabled(McpSwitch.IsChecked == true);
     }
+
+    /// <summary>Opens the settings dialog, where every other operation lives.</summary>
+    private void Settings_Click(object sender, RoutedEventArgs e) =>
+        (System.Windows.Application.Current as App)?.OpenSettings();
 
     /// <summary>Lets the user pick today or any future day. Returns null when cancelled.</summary>
     public DateTime? PickMoveDate(DateTime earliest)
@@ -195,8 +206,16 @@ public partial class MainWindow : Window
         var app = (App)System.Windows.Application.Current;
         if (!app.ForceExit)
         {
+            if (app.Settings.MinimizeToTrayOnClose)
+            {
+                e.Cancel = true;
+                Hide();
+                return;
+            }
+
+            // The user turned "minimize to tray" off in the settings dialog: really quit.
             e.Cancel = true;
-            Hide();
+            Dispatcher.BeginInvoke(new Action(() => app.ExitApp()));
             return;
         }
         base.OnClosing(e);
