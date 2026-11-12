@@ -1,0 +1,22 @@
+# .NET / WPF 编译输出
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.pdb
+*.cache
+
+# 发布产物与安装包（dist 下的 exe，约 120 MB）
+/dist/
+
+# 本地下载的 .NET SDK（tools/ 约 1 GB，不入库）
+/tools/
+
+# WorkBuddy 项目数据
+/.workbuddy/
+
+# 系统杂项
+Thumbs.db
+.DS_Store
