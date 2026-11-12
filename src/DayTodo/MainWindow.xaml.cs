@@ -13,14 +13,114 @@ public partial class MainWindow : Window
 {
     private DateOnly _today = DateOnly.FromDateTime(DateTime.Today);
     private readonly DispatcherTimer _dateTimer;
+    private bool _mcpSwitchSyncing;
 
     public MainWindow()
     {
         InitializeComponent();
 
+        Loaded += (_, _) => SyncMcpSwitch(
+            (System.Windows.Application.Current as App)?.McpEnabled ?? false);
+
         _dateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
         _dateTimer.Tick += (_, _) => CheckDateChange();
         _dateTimer.Start();
+    }
+
+    /// <summary>Also called by App when the service is toggled from the tray menu.</summary>
+    public void SyncMcpSwitch(bool enabled)
+    {
+        _mcpSwitchSyncing = true;
+        McpSwitch.IsChecked = enabled;
+        _mcpSwitchSyncing = false;
+    }
+
+    private void McpSwitch_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_mcpSwitchSyncing) return;
+        (System.Windows.Application.Current as App)?.SetMcpEnabled(McpSwitch.IsChecked == true);
+    }
+
+    /// <summary>Lets the user pick today or any future day. Returns null when cancelled.</summary>
+    public DateTime? PickMoveDate(DateTime earliest)
+    {
+        var start = earliest.Date;
+        var suggested = start.AddDays(1);
+
+        var calendar = new Calendar
+        {
+            DisplayDateStart = start,
+            SelectedDate = suggested,
+            DisplayDate = suggested,
+            FirstDayOfWeek = DayOfWeek.Monday,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(8, 6, 8, 0)
+        };
+
+        var ok = new Button
+        {
+            Content = "移动", Width = 84, Height = 30, IsDefault = true,
+            Style = (Style)FindResource("PrimaryButton")
+        };
+        var cancel = new Button
+        {
+            Content = "取消", Width = 72, Height = 30,
+            Style = (Style)FindResource("SubtleButton"),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(16, 10, 16, 16)
+        };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(ok);
+
+        var root = new StackPanel();
+        root.Children.Add(new TextBlock
+        {
+            Text = "把任务移动到哪一天？", FontSize = 13,
+            Foreground = (Brush)FindResource("TextPrimary"),
+            Margin = new Thickness(16, 16, 16, 0)
+        });
+        root.Children.Add(new TextBlock
+        {
+            Text = "只能选今天或之后；选今天就是拉回今天", FontSize = 11,
+            Foreground = (Brush)FindResource("TextMuted"),
+            Margin = new Thickness(16, 6, 16, 0)
+        });
+        root.Children.Add(calendar);
+        root.Children.Add(buttons);
+
+        var dialog = new Window
+        {
+            Title = "移动任务",
+            Owner = this,
+            Width = 320,
+            SizeToContent = SizeToContent.Height,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            WindowStyle = WindowStyle.ToolWindow,
+            ShowInTaskbar = false,
+            Background = Brushes.White,
+            Content = root
+        };
+
+        DateTime? picked = null;
+        ok.Click += (_, _) =>
+        {
+            if (calendar.SelectedDate == null) return;
+            picked = calendar.SelectedDate.Value.Date;
+            dialog.DialogResult = true;
+        };
+        cancel.Click += (_, _) => dialog.DialogResult = false;
+
+        dialog.ShowDialog();
+        return picked;
     }
 
     private void CheckDateChange()

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -44,8 +45,17 @@ public static class DataStore
         PropertyNameCaseInsensitive = true
     };
 
-    public static string DataDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DayTodo");
+    /// <summary>DAYTODO_DATA_DIR can redirect storage, e.g. for isolated smoke tests.</summary>
+    public static string DataDir
+    {
+        get
+        {
+            var custom = Environment.GetEnvironmentVariable("DAYTODO_DATA_DIR");
+            return string.IsNullOrWhiteSpace(custom)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DayTodo")
+                : custom;
+        }
+    }
 
     public static string DataFilePath => Path.Combine(DataDir, "tasks.json");
 
@@ -204,5 +214,50 @@ public static class StartupService
             }
         }
         catch (Exception) { }
+    }
+}
+
+/// <summary>Reschedules an unfinished task to today or a future day.</summary>
+public static class TaskScheduleService
+{
+    /// <summary>
+    /// A move is a reschedule: DateOrigin and DateCurrent both become the target day and
+    /// accumulated carry-over days are cleared, so the task leaves its old day entirely.
+    /// Past dates and completed tasks are rejected.
+    /// </summary>
+    public static bool Move(TaskItem task, string target, string today)
+    {
+        if (task.DateCompleted != null) return false;
+        if (!DateUtil.IsValid(target)) return false;
+        if (DateUtil.Compare(target, today) < 0) return false;
+        if (task.DateOrigin == target && task.DateCurrent == target) return false;
+
+        task.DateOrigin = target;
+        task.DateCurrent = target;
+        task.PostponeDays = 0;
+        return true;
+    }
+
+    /// <summary>True when the task is scheduled on a day after today and can be pulled back.</summary>
+    public static bool IsFuture(TaskItem task, string today) =>
+        task.DateCompleted == null && DateUtil.Compare(task.DateOrigin, today) > 0;
+}
+
+/// <summary>Reveals the raw task data file in Explorer.</summary>
+public static class DataLocationService
+{
+    /// <summary>Opens Explorer and selects tasks.json (or just the folder if it doesn't exist yet).</summary>
+    public static void OpenDataLocation()
+    {
+        Directory.CreateDirectory(DataStore.DataDir);
+        var psi = new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            UseShellExecute = true,
+            Arguments = File.Exists(DataStore.DataFilePath)
+                ? "/select,\"" + DataStore.DataFilePath + "\""
+                : "\"" + DataStore.DataDir + "\""
+        };
+        Process.Start(psi);
     }
 }

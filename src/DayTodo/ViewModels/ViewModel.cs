@@ -58,6 +58,7 @@ public sealed class MainViewModel : ObservableObject
 
     private readonly AppData _data;
     private readonly Action<string>? _notify;
+    private readonly Func<DateTime, DateTime?>? _pickDate;
     private DateTime _selectedDate = DateTime.Today;
     private string _newTitle = string.Empty;
     private string _newTags = string.Empty;
@@ -68,6 +69,8 @@ public sealed class MainViewModel : ObservableObject
     private int _streakDays;
     private double _progress;
     private bool _viewingToday = true;
+    private DateTime? _nextFutureDate;
+    private int _futureCount;
 
     public ObservableCollection<TaskRowViewModel> Rows { get; } = new();
 
@@ -76,17 +79,23 @@ public sealed class MainViewModel : ObservableObject
     public ICommand TodayCommand { get; }
     public ICommand AddCommand { get; }
     public ICommand SetPriorityCommand { get; }
+    public ICommand OpenDataFolderCommand { get; }
+    public ICommand GoToFutureCommand { get; }
 
-    public MainViewModel(AppData data, Action<string>? notify = null)
+    public MainViewModel(AppData data, Action<string>? notify = null,
+        Func<DateTime, DateTime?>? pickDate = null)
     {
         _data = data;
         _notify = notify;
+        _pickDate = pickDate;
 
         PrevDayCommand = new RelayCommand(_ => MoveDay(-1));
         NextDayCommand = new RelayCommand(_ => MoveDay(1));
         TodayCommand = new RelayCommand(_ => SetSelectedDate(DateTime.Today));
         AddCommand = new RelayCommand(_ => AddTask());
         SetPriorityCommand = new RelayCommand(p => SetPriority(p));
+        OpenDataFolderCommand = new RelayCommand(_ => OpenDataFolder());
+        GoToFutureCommand = new RelayCommand(_ => GoToFuture());
 
         Rebuild();
     }
@@ -148,6 +157,10 @@ public sealed class MainViewModel : ObservableObject
 
     public bool HasNoTasks => _totalCount == 0;
 
+    /// <summary>Tasks scheduled on a future day (hidden from today's list).</summary>
+    public bool HasFutureTasks => _futureCount > 0;
+    public int FutureCount => _futureCount;
+
     public int NewPriority
     {
         get => _newPriority;
@@ -187,6 +200,11 @@ public sealed class MainViewModel : ObservableObject
     private string Sel() => DateUtil.From(_selectedDate);
 
     private void MoveDay(int delta) => SetSelectedDate(_selectedDate.AddDays(delta));
+
+    private void GoToFuture()
+    {
+        if (_nextFutureDate != null) SetSelectedDate(_nextFutureDate.Value);
+    }
 
     private void SetPriority(object? parameter)
     {
@@ -252,10 +270,53 @@ public sealed class MainViewModel : ObservableObject
         Commit();
     }
 
+    /// <summary>Ask the view for a target day (today or later), then reschedule.</summary>
+    private void MoveTask(TaskRowViewModel row)
+    {
+        if (!CanEdit || row.IsDone || _pickDate == null) return;
+        var picked = _pickDate(DateTime.Today);
+        if (picked == null) return;
+        Reschedule(row, picked.Value);
+    }
+
+    private void BringToToday(TaskRowViewModel row)
+    {
+        if (!Reschedule(row, DateTime.Today)) return;
+        // Follow the task back, otherwise it just vanishes from the future day's list.
+        SetSelectedDate(DateTime.Today);
+    }
+
+    private bool Reschedule(TaskRowViewModel row, DateTime target)
+    {
+        if (!CanEdit || row.IsDone) return false;
+        var day = DateUtil.From(target);
+        if (!TaskScheduleService.Move(row.Model, day, DateUtil.Today())) return false;
+        Commit();
+        _notify?.Invoke("任务已移动到 " + DateUtil.Short(day));
+        return true;
+    }
+
     private void Commit()
     {
         DataStore.Save(_data);
         Rebuild();
+    }
+
+    /// <summary>An MCP tool changed the shared data; persist and refresh like a user action.</summary>
+    public void CommitExternalChange() => Commit();
+
+    /// <summary>Reveal tasks.json in Explorer so the raw records can be copied or inspected.</summary>
+    private void OpenDataFolder()
+    {
+        try
+        {
+            DataLocationService.OpenDataLocation();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("打开记录位置失败：" + ex.Message, "DayTodo 日清单",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     /// <summary>Called when the system date rolls over while the app is running.</summary>
@@ -279,7 +340,8 @@ public sealed class MainViewModel : ObservableObject
 
         var rows = _data.Tasks
             .Where(t => AppearsOn(t, sel, today))
-            .Select(t => new TaskRowViewModel(t, sel, today, editable, Toggle, Delete))
+            .Select(t => new TaskRowViewModel(t, sel, today, editable,
+                Toggle, Delete, MoveTask, BringToToday))
             .OrderBy(r => r.IsDone ? 1 : 0)
             .ThenByDescending(r => r.Model.Priority)
             .ThenBy(r => r.Model.DateOrigin, StringComparer.Ordinal)
@@ -293,6 +355,7 @@ public sealed class MainViewModel : ObservableObject
         CarryCount = rows.Count(r => !r.IsDone && r.Model.PostponeDays > 0);
         Progress = TotalCount == 0 ? 0 : DoneCount * 100.0 / TotalCount;
         StreakDays = ComputeStreak(today);
+        RefreshFutureSummary(today);
 
         OnPropertyChanged(nameof(SelectedDateText));
         OnPropertyChanged(nameof(WeekdayText));
@@ -303,6 +366,23 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanAdd));
         OnPropertyChanged(nameof(HasNoTasks));
         OnPropertyChanged(nameof(SummaryText));
+    }
+
+    /// <summary>Keeps the "future plans" entry point in sync with the task list.</summary>
+    private void RefreshFutureSummary(string today)
+    {
+        var future = _data.Tasks
+            .Where(t => TaskScheduleService.IsFuture(t, today))
+            .OrderBy(t => t.DateOrigin, StringComparer.Ordinal)
+            .ToList();
+
+        _futureCount = future.Count;
+        _nextFutureDate = future.Count == 0
+            ? (DateTime?)null
+            : DateTime.ParseExact(future[0].DateOrigin, DateUtil.Format, CultureInfo.InvariantCulture);
+
+        OnPropertyChanged(nameof(FutureCount));
+        OnPropertyChanged(nameof(HasFutureTasks));
     }
 
     private int ComputeStreak(string today)
@@ -347,17 +427,26 @@ public sealed class TaskRowViewModel : ObservableObject
 
     private readonly Action<TaskRowViewModel> _toggle;
     private readonly Action<TaskRowViewModel> _delete;
+    private readonly Action<TaskRowViewModel> _move;
+    private readonly Action<TaskRowViewModel> _bringToToday;
 
     public TaskRowViewModel(TaskItem model, string sel, string today, bool canEdit,
-        Action<TaskRowViewModel> toggle, Action<TaskRowViewModel> delete)
+        Action<TaskRowViewModel> toggle, Action<TaskRowViewModel> delete,
+        Action<TaskRowViewModel> move, Action<TaskRowViewModel> bringToToday)
     {
         Model = model;
         CanEdit = canEdit;
         _toggle = toggle;
         _delete = delete;
+        _move = move;
+        _bringToToday = bringToToday;
+
+        CanBringToToday = CanMove && TaskScheduleService.IsFuture(model, today);
 
         ToggleCommand = new RelayCommand(_ => _toggle(this), _ => canEdit);
         DeleteCommand = new RelayCommand(_ => _delete(this), _ => canEdit);
+        MoveCommand = new RelayCommand(_ => _move(this), _ => CanMove);
+        BringToTodayCommand = new RelayCommand(_ => _bringToToday(this), _ => CanBringToToday);
 
         ComputeBadge(sel, today);
     }
@@ -397,6 +486,14 @@ public sealed class TaskRowViewModel : ObservableObject
 
     public ICommand ToggleCommand { get; }
     public ICommand DeleteCommand { get; }
+    public ICommand MoveCommand { get; }
+    public ICommand BringToTodayCommand { get; }
+
+    /// <summary>Only unfinished tasks on an editable day can be rescheduled.</summary>
+    public bool CanMove => CanEdit && !IsDone;
+
+    /// <summary>Show the shortcut only for tasks sitting on a future day.</summary>
+    public bool CanBringToToday { get; }
 
     private void ComputeBadge(string sel, string today)
     {

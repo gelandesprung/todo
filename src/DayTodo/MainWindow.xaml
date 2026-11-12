@@ -81,9 +81,19 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <Button Grid.Column="3" Content="删除" Style="{StaticResource DeleteButton}"
-                            Command="{Binding DeleteCommand}" VerticalAlignment="Center"
-                            Visibility="{Binding CanEdit, Converter={StaticResource BoolVis}}" />
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="拉回今天" Style="{StaticResource RowActionButton}"
+                                Command="{Binding BringToTodayCommand}"
+                                ToolTip="把这条未来任务移回今天"
+                                Visibility="{Binding CanBringToToday, Converter={StaticResource BoolVis}}" />
+                        <Button Content="改期" Style="{StaticResource RowActionButton}" Margin="6,0,0,0"
+                                Command="{Binding MoveCommand}"
+                                ToolTip="移动到今天或未来的某一天"
+                                Visibility="{Binding CanMove, Converter={StaticResource BoolVis}}" />
+                        <Button Content="删除" Style="{StaticResource DeleteButton}" Margin="8,0,0,0"
+                                Command="{Binding DeleteCommand}"
+                                Visibility="{Binding CanEdit, Converter={StaticResource BoolVis}}" />
+                    </StackPanel>
                 </Grid>
             </Border>
         </DataTemplate>
@@ -190,6 +200,24 @@
                                     </TextBlock.Text>
                                 </TextBlock>
                             </Grid>
+
+                            <Grid Margin="0,7,0,0"
+                                  Visibility="{Binding HasFutureTasks, Converter={StaticResource BoolVis}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="未来安排" FontSize="11.5" Foreground="{StaticResource TextSecondary}" />
+                                <Button Grid.Column="1" Style="{StaticResource LinkButton}"
+                                        Command="{Binding GoToFutureCommand}"
+                                        ToolTip="跳到最近的未来安排日，可把任务拉回今天">
+                                    <TextBlock FontSize="11.5">
+                                        <TextBlock.Text>
+                                            <Binding Path="FutureCount" StringFormat="{}{0} 项 · 查看" />
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                </Button>
+                            </Grid>
                         </StackPanel>
 
                         <StackPanel Grid.Row="3" VerticalAlignment="Bottom">
@@ -200,6 +228,23 @@
                             <TextBlock Margin="2,8,0,0" FontSize="10.5" Foreground="{StaticResource TextMuted}"
                                        TextWrapping="Wrap"
                                        Text="关闭窗口后最小化到托盘，任务不会丢" />
+
+                            <CheckBox x:Name="McpSwitch" Margin="2,12,0,0" Content="启用 MCP 服务"
+                                      FontSize="11.5" Foreground="{StaticResource TextSecondary}"
+                                      Checked="McpSwitch_Changed" Unchecked="McpSwitch_Changed"
+                                      ToolTip="开启后 AI 客户端可通过 http://127.0.0.1:8765/mcp 创建任务" />
+                            <TextBlock Margin="2,4,0,0" FontSize="10" Foreground="{StaticResource TextMuted}"
+                                       TextWrapping="Wrap" Text="AI 客户端可在本机 8765 端口创建任务" />
+
+                            <Rectangle Height="0.5" Fill="#E8E6E0" Margin="0,12,0,0" />
+                            <TextBlock Text="记录数据" FontSize="11" Foreground="{StaticResource TextMuted}"
+                                       Margin="2,10,0,7" />
+                            <Button Content="打开记录所在位置" Style="{StaticResource SubtleButton}"
+                                    HorizontalAlignment="Stretch"
+                                    Command="{Binding OpenDataFolderCommand}"
+                                    ToolTip="在资源管理器中定位 tasks.json（同目录还有 backups 备份）" />
+                            <TextBlock Margin="2,6,0,0" FontSize="10" Foreground="{StaticResource TextMuted}"
+                                       TextWrapping="Wrap" Text="%APPDATA%\DayTodo\tasks.json" />
                         </StackPanel>
                     </Grid>
                 </Border>

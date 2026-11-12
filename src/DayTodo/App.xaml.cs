@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
+using DayTodo.Mcp;
 using DayTodo.Services;
 using DayTodo.ViewModels;
 using WinForms = System.Windows.Forms;
@@ -18,8 +19,15 @@ public partial class App : Application
     private MainWindow? _window;
     private MainViewModel? _vm;
     private bool _forceExit;
+    private McpSettings _mcpSettings = new();
+    private McpServer? _mcpServer;
+    private McpHttpHost? _mcpHost;
+    private WinForms.ToolStripMenuItem? _mcpMenuItem;
 
     public bool ForceExit => _forceExit;
+
+    /// <summary>True only when the listener is actually running (switch state alone is not enough).</summary>
+    public bool McpEnabled => _mcpHost?.IsRunning == true;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -52,12 +60,19 @@ public partial class App : Application
             var moved = RolloverService.Run(data, DateUtil.Today());
             DataStore.Save(data);
 
-            _vm = new MainViewModel(data, ShowBalloon);
-            _window = new MainWindow { DataContext = _vm };
+            _window = new MainWindow();
+            _vm = new MainViewModel(data, ShowBalloon, _window.PickMoveDate);
+            _window.DataContext = _vm;
             MainWindow = _window;
+
+            _mcpSettings = McpSettings.Load();
+            _mcpServer = new McpServer(new McpTaskService(data, Dispatcher,
+                () => _vm!.CommitExternalChange()));
 
             InitTray();
             StartActivationListener();
+            if (_mcpSettings.Enabled) StartMcp();
+            SyncMcpUi();
 
             var silentStart = Array.IndexOf(e.Args, "--minimized") >= 0;
             if (!silentStart) _window.Show();
@@ -174,6 +189,17 @@ public partial class App : Application
             };
             auto.CheckedChanged += (_, _) => StartupService.SetEnabled(auto.Checked);
             menu.Items.Add(auto);
+
+            _mcpMenuItem = new WinForms.ToolStripMenuItem("启用 MCP 服务")
+            {
+                CheckOnClick = false,
+                Checked = McpEnabled
+            };
+            _mcpMenuItem.Click += (_, _) => SetMcpEnabled(!McpEnabled);
+            menu.Items.Add(_mcpMenuItem);
+
+            menu.Items.Add(new WinForms.ToolStripSeparator());
+            menu.Items.Add("打开记录所在位置", null, (_, _) => _vm?.OpenDataFolderCommand.Execute(null));
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("退出", null, (_, _) => ExitApp());
 
@@ -241,8 +267,55 @@ public partial class App : Application
         thread.Start();
     }
 
+    private void StartMcp()
+    {
+        if (_mcpServer == null || _mcpHost != null) return;
+        try
+        {
+            var token = string.IsNullOrWhiteSpace(_mcpSettings.Token)
+                ? Environment.GetEnvironmentVariable("DAYTODO_MCP_TOKEN")
+                : _mcpSettings.Token;
+            var host = new McpHttpHost(_mcpServer, _mcpSettings.Port, token);
+            host.Start();
+            _mcpHost = host;
+        }
+        catch (Exception ex)
+        {
+            // Port taken or no permission: the app keeps working, the switch shows off.
+            System.Diagnostics.Debug.WriteLine("DayTodo MCP 启动失败：" + ex.Message);
+        }
+    }
+
+    private void StopMcp()
+    {
+        try { _mcpHost?.Stop(); }
+        catch (Exception) { }
+        _mcpHost = null;
+    }
+
+    /// <summary>Toggled from the window switch or the tray menu; the choice is persisted.</summary>
+    public void SetMcpEnabled(bool enabled)
+    {
+        _mcpSettings.Enabled = enabled;
+        McpSettings.Save(_mcpSettings);
+        if (enabled) StartMcp();
+        else StopMcp();
+        SyncMcpUi();
+    }
+
+    private void SyncMcpUi()
+    {
+        var on = McpEnabled;
+        Dispatcher.Invoke(() =>
+        {
+            if (_mcpMenuItem != null) _mcpMenuItem.Checked = on;
+            _window?.SyncMcpSwitch(on);
+        });
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
+        StopMcp();
         try { _tray?.Dispose(); } catch (Exception) { }
         try { _trayIcon?.Dispose(); } catch (Exception) { }
         try { if (_mutex != null) _mutex.ReleaseMutex(); } catch (Exception) { }

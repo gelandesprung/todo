@@ -17,6 +17,8 @@
 | 顺延标记 | 橙色「顺延 N 天」，满 3 天变红；历史日显示「未完成 · 已顺延至今天」 |
 | 历史只读 | 选中今天之前的日期时，不能新增、勾选、删除 |
 | 删除 | 硬删除，点「删除」立即移除，不进回收站、不可恢复 |
+| 改期移动 | 任务行「改期」可移到今天或未来任意一天；未来任务行多一个「拉回今天」，一键移回 |
+| 记录位置 | 左下角「打开记录所在位置」或托盘右键，直接在资源管理器里选中 `tasks.json` |
 | 标签 / 优先级 | 标签逗号分隔最多 4 个；高 / 中 / 低三级，列表按未完成优先、再按优先级排序 |
 | 托盘常驻 | 关闭窗口只隐藏到托盘，双击托盘图标恢复；右键可退出 / 开关开机自启 |
 | 开机自启 | 写 `HKCU\...\Run`，带 `--minimized` 参数，启动后直接进托盘 |
@@ -30,13 +32,14 @@ D:\workbuddy\todo\
 │  ├─ DayTodo.csproj          项目配置（WPF + WinForms 托盘，图标 / 清单）
 │  ├─ app.manifest            DPI 感知、asInvoker、Win10/11 兼容声明
 │  ├─ App.xaml / .cs          启动、单实例、托盘、全局异常处理
-│  ├─ MainWindow.xaml / .cs  主窗口、标题栏、跨零点定时器
+│  ├─ MainWindow.xaml / .cs  主窗口、标题栏、改期日期选择、跨零点定时器
 │  ├─ Assets\app.ico          exe / 安装包图标（16/32/48/256 四档）
 │  ├─ Assets\tray.png         托盘图标（内嵌资源）
 │  ├─ Themes\Styles.xaml      浅色画刷与控件样式
 │  ├─ Models\Entities.cs      TaskItem / AppData
-│  ├─ Services\Services.cs    JSON 存储、顺延引擎、开机自启
-│  └─ ViewModels\ViewModel.cs MVVM 视图模型与命令
+│  ├─ Services\Services.cs    JSON 存储、顺延引擎、改期、开机自启、数据位置
+│  ├─ ViewModels\ViewModel.cs MVVM 视图模型与命令
+│  └─ Mcp\                    内嵌 MCP 服务：协议 / HTTP / 数据 / 开关设置
 ├─ build\
 │  ├─ make-icon.ps1          生成多尺寸 ico + 托盘 png
 │  ├─ publish.ps1            一键编译 / 发布 / 打安装包
@@ -54,6 +57,7 @@ D:\workbuddy\todo\
 - 写入方式：先写 `.tmp` 再原子替换，断电不会写坏主文件
 - 文件损坏时：自动改名为 `tasks.corrupt-*.json`，并从最新备份恢复
 - **卸载程序不会删除任务数据**；需要彻底清除请手动删 `%APPDATA%\DayTodo`
+- 找记录：左下角「打开记录所在位置」或托盘右键同名菜单，会在资源管理器里选中 `tasks.json`（同目录还有 `backups` 备份）；想导出/备份直接复制这个文件即可
 
 ### 任务字段与顺延规则
 
@@ -61,13 +65,21 @@ D:\workbuddy\todo\
 
 | 字段 | 含义 |
 |---|---|
-| `DateOrigin` | 首次排在哪天，永不改变 |
+| `DateOrigin` | 首次排在哪天；改期移动任务时会改写为目标日（等于重新排期） |
 | `DateCurrent` | 当前排期，顺延后变成今天 |
 | `DateCompleted` | 完成日期，`null` = 未完成 |
 | `PostponeDays` | 累计顺延天数 |
 
 某天是否显示这条任务：`DateOrigin ≤ 该天 ≤ DateCompleted`（未完成时右边界为今天）。
 扫描到 `DateCurrent < 今天` 且未完成的任务时，`PostponeDays += 相差天数`，`DateCurrent = 今天`。
+
+### 改期 / 移动任务
+
+未完成的任务可以用任务行的「改期」打开日历窗口，选今天或之后的任意一天（不能移到过去）。查看未来某天时，那天的任务行会多出「拉回今天」，点一下就移回今天；也可以在日历窗口里直接选今天。
+
+移动 = 重新排期，不是复制：`DateOrigin` 和 `DateCurrent` 一起改成目标日，`PostponeDays` 清零，任务从原来的日期消失（历史日也不再显示它）。目标日到了还没完成，就照常按上面的顺延规则累计天数。已完成的任务、历史日（只读）不能移动。
+
+移到未来后，今天的列表里就看不到这条任务了；左侧「今日概览」会出现「未来安排 N 项 · 查看」，点它跳到最近的未来日，在那里可以「拉回今天」（点完界面会跟着回到今天）。
 
 ## 开发运行
 
@@ -161,6 +173,8 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 6. 重复双击 exe → 只激活已有窗口，不出现第二个进程
 7. 手动改坏 `tasks.json` → 启动后自动隔离并从备份恢复
 8. 在中文用户名 / 带空格路径下安装运行
+9. 今天的任务点「改期」选下周某天 → 今天列表里消失 → 翻到那天能看到 → 点「拉回今天」→ 回到今天
+10. 点「打开记录所在位置」→ 资源管理器选中 `tasks.json`；托盘右键同名菜单也能用
 
 常见坑：
 
@@ -171,3 +185,78 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 - **DPI 模糊**：`app.manifest` 已声明 PerMonitorV2；多显示器不同缩放需在你的目标系统实测。
 - **数据写不进去**：确认 `%APPDATA%\DayTodo` 可写（企业策略可能重定向 AppData）。
 - **32 位系统**：产物是 `win-x64`，安装包也已限制 x64；Win10/11 32 位需改成 `win-x86` 重新发布。
+
+## MCP 服务：让 AI 客户端创建任务
+
+MCP 服务**内嵌在 DayTodo 主程序里**：应用启动后自动在 `http://127.0.0.1:8765/mcp` 监听，WorkBuddy、Claude Desktop、Cline 等 AI 客户端可以直接往日清单里创建任务。工具操作的是主程序同一份内存数据，界面立刻刷新；不需要第二个 exe、不需要文件锁、也不需要外部转发。
+
+### 界面开关
+
+左栏「开机自启」下方有「启用 MCP 服务」勾选框，托盘右键菜单里也有同名勾选项。关掉即停止监听，再打开即重新启动；状态保存在 `%APPDATA%\DayTodo\mcp-settings.json`，下次启动沿用（默认开启）。
+
+```json
+{
+  "Enabled": true,
+  "Port": 8765,
+  "Token": ""
+}
+```
+
+`Token` 非空时请求需带 `Authorization: Bearer <令牌>`；也可用环境变量 `DAYTODO_MCP_TOKEN`（配置文件优先）。服务只绑定 127.0.0.1 并校验 `Origin`。端口占用时服务保持关闭，主程序照常运行。
+
+### 工具
+
+| 工具 | 作用 | 主要参数 |
+|---|---|---|
+| `create_task` | 新建任务，默认排今天，可指定今天或未来日期 | `title`（必填）、`date`（`yyyy-MM-dd`）、`priority`（`low`/`normal`/`high`，也接受 高/中/低 或 0/1/2）、`tags`（最多 4 个） |
+| `list_tasks` | 列出任务，返回 `id` 供后续操作 | `date`、`include_completed`、`all` |
+| `complete_task` | 标记完成 / 撤销完成 | `id` 或 `title`、`undo` |
+| `delete_task` | 硬删除，不可恢复 | `id` 或 `title` |
+| `get_overview` | 今日总数 / 已完成 / 未完成 / 顺延数 | 无 |
+
+历史日期只读，给过去日期创建任务会返回错误。`delete_task` 与主程序一样是立即硬删除，不进回收站。
+
+### 在 WorkBuddy 里配置
+
+服务由应用托管，客户端用 URL 连接（不再需要 `command` 启动独立进程）。
+
+1. 打开用户级配置文件 `C:\Users\<用户名>\.workbuddy\mcp.json`（不存在就新建）。也可以从侧边栏「连接器 / 插件 → 管理连接器 → 右上角自定义连接器」打开内置 JSON 编辑器：
+
+```json
+{
+  "mcpServers": {
+    "daytodo": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "description": "DayTodo 日清单：创建、查询、完成和删除每日任务"
+    }
+  }
+}
+```
+
+2. 在连接器管理里找到 `daytodo`，点「信任」并启用，状态变绿即连接成功。
+3. 重启 WorkBuddy 客户端（改 `mcp.json` 后需重启才会加载），之后直接用自然语言说「帮我加个任务：……」即可。
+
+WorkBuddy 的 Streamable HTTP 类型固定写 `"type": "http"`；Cline、Claude Desktop 等客户端可能写 `"streamableHttp"`，也常可省略 `type` 由 `url` 自动推断。启用 token 时加 `"headers": { "Authorization": "Bearer <令牌>" }`。CLI 用户可执行 `codebuddy mcp add-json --scope user daytodo '{"type":"http","url":"http://127.0.0.1:8765/mcp"}'`。
+
+**注意**：DayTodo 没运行（或开关关闭）时客户端连不上，先启动应用；建议同时开启「开机自启」。
+
+手动试一下：
+
+```bash
+curl -X POST http://127.0.0.1:8765/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_task","arguments":{"title":"用 AI 加的任务"}}}'
+```
+
+端点行为：`POST` 返回 JSON（只接受 `text/event-stream` 时返回 SSE），通知返回 202，`GET` 返回 405，`DELETE` 结束会话。
+
+### 实现位置
+
+- `src\DayTodo\Mcp\McpServer.cs`：MCP JSON-RPC 2.0（initialize / tools/list / tools/call / ping）
+- `src\DayTodo\Mcp\McpHttpHost.cs`：Streamable HTTP，TcpListener 手写，零 NuGet 依赖
+- `src\DayTodo\Mcp\McpTaskService.cs`：工具的数据操作，切到 UI 线程后走 `DataStore.Save` + `Rebuild`
+- `src\DayTodo\Mcp\McpSettings.cs`：开关状态持久化
+
+数据仍是 `tasks.json`（UTF-8 无 BOM、中文不转义、原子写 + 7 份备份）。因为只有一个进程写，不再需要跨进程锁、乐观重试或 FileSystemWatcher。
