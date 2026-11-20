@@ -1,11 +1,12 @@
 # DayTodo 日清单
 
-一个 Windows 桌面待办程序：按天显示任务、可查历史、未完成的任务第二天自动续过来。
+一个 Windows 桌面待办程序：按天显示任务、随手记下想法、可查历史；未完成的任务第二天自动续过来。
 
 - 技术栈：C# / WPF / .NET 8（`net8.0-windows`），自包含发布，目标机器**不需要安装 .NET**
 - 目标系统：Windows 10 / 11，64 位（Win10/11 x64 需在你的目标机器上实测）
 - 权限：普通用户权限，安装与运行都不弹 UAC
 - 主题：固定浅色
+- 当前版本：1.0.7（[下载安装包 / 便携版](https://github.com/gelandesprung/todo/releases/tag/v1.0.7)）
 
 ## 功能
 
@@ -25,6 +26,10 @@
 | 托盘常驻 | 关闭窗口只隐藏到托盘，双击托盘图标恢复；托盘菜单只剩「显示主窗口 / 设置… / 退出」 |
 | 开机自启 | 设置里开关，写 `HKCU\...\Run`，带 `--minimized` 参数，启动后直接进托盘 |
 | 单实例 | 第二次启动时激活已有窗口，不重复开进程 |
+| 随记 | 主窗口「任务 / 随记」标签共用左侧日历；按天归类，只能记今天，历史随记只读 |
+| 随记引用 | 历史随记点「引用」跳回今天并插入编辑框；引用按 ID 回读原文，源被删时用快照兜底 |
+| 随记折叠 | 长随记默认只显示约 3 行，可「展开全文 / 收起」；折叠状态只在本机界面上，不写进数据 |
+| 当天可改 | 今天的随记可编辑、删除；跨零点后永久只读 |
 
 ## 目录结构
 
@@ -39,21 +44,26 @@ D:\workbuddy\todo\
 │  ├─ Assets\app.ico          exe / 安装包图标（16/32/48/256 四档）
 │  ├─ Assets\tray.png         托盘图标（内嵌资源）
 │  ├─ Themes\Styles.xaml      浅色画刷与控件样式（含设置面板用开关）
-│  ├─ Models\Entities.cs      TaskItem / AppData / DayFile / 索引模型
+│  ├─ Models\Entities.cs      TaskItem / NoteItem / NoteReference / AppData / DayFile / 索引模型
 │  ├─ Services\Services.cs    顺延引擎、改期、开机自启、数据位置
 │  ├─ Services\DataStore.cs   按天分片存储、脏写、manifest、迁移与恢复
 │  ├─ Services\CloudStore.cs  云端文件桶抽象（ICloudStore / 空实现 / 本地目录参考实现）
 │  ├─ Services\AppSettings.cs 应用偏好（关闭窗口是否最小化到托盘）
-│  ├─ ViewModels\ViewModel.cs MVVM 视图模型与命令
+│  ├─ ViewModels\ViewModel.cs MVVM 视图模型与命令（任务 + 随记）
 │  ├─ ViewModels\SettingsViewModel.cs 设置面板视图模型
-│  └─ Mcp\                    内嵌 MCP 服务：协议 / HTTP / 数据 / 开关设置
+│  └─ Mcp\                    内嵌 MCP 服务
+│     ├─ McpServer.cs         JSON-RPC 2.0 与 10 个工具（任务 + 随记）
+│     ├─ McpHttpHost.cs       Streamable HTTP，TcpListener 手写，零 NuGet 依赖
+│     ├─ McpTaskService.cs    任务工具的数据操作
+│     ├─ McpNoteService.cs    随记工具的数据操作
+│     └─ McpSettings.cs       开关状态持久化
 ├─ build\
 │  ├─ make-icon.ps1          生成多尺寸 ico + 托盘 png
 │  ├─ publish.ps1            一键编译 / 发布 / 打安装包
 │  └─ installer.iss          Inno Setup 6 脚本（当前用户安装）
 ├─ dist\
 │  ├─ portable\DayTodo.exe   单文件便携版
-│  └─ installer\DayTodo-Setup-1.0.4.exe
+│  └─ installer\DayTodo-Setup-1.0.7.exe
 └─ README.md
 ```
 
@@ -64,10 +74,10 @@ D:\workbuddy\todo\
 ```
 %APPDATA%\DayTodo\
 ├─ days\
-│  ├─ 2026-11-11.json     当天排期的全部任务（按 DateCurrent 归属，一条任务只存一份）
+│  ├─ 2026-11-11.json     当天的任务（按 DateCurrent 归属，一条任务只存一份）与随记
 │  ├─ 2026-11-12.json
 │  └─ 2026-11-13.json     今天
-├─ manifest.json          索引：每个日期的文件名、任务数、SHA-256
+├─ manifest.json          索引：每个日期的文件名、任务数、随记数、SHA-256
 ├─ backups\
 │  ├─ 2026-11-13\
 │  │  └─ 2026-11-13-071530.json   该日改动前的副本，每个日期最多 7 份
@@ -77,7 +87,8 @@ D:\workbuddy\todo\
 └─ tasks.json             旧版全库文件，迁移后原样保留作为回滚点
 ```
 
-- 日文件格式：`{ "SchemaVersion": 2, "Date": "yyyy-MM-dd", "Tasks": [...] }`，UTF-8 无 BOM、中文不转义，可直接用记事本看；字段仍是 PascalCase（`Id` 是 GUID 字符串，`DateCompleted` 可为 null）
+- 日文件格式：`{ "SchemaVersion": 3, "Date": "yyyy-MM-dd", "Tasks": [...], "Notes": [...] }`，UTF-8 无 BOM、中文不转义，可直接用记事本看；字段仍是 PascalCase（任务的 `Id` 是 GUID 字符串，`DateCompleted` 可为 null；随记见下节）
+- `manifest.json` 的 `Count` 仍是任务数，新增 `NoteCount` 单独统计当天随记数，SHA-256 覆盖整份日文件
 - `manifest.json` 由 PC 端独占写，**不含时间戳**：内容不变就不会重写，将来别的设备只读它、再用 `Sha256` 算出需要增量下载哪几天
 - **只写脏文件**：保存时按 `DateCurrent` 分组，内容没变的日期文件一个字节都不动。这是特意为了网盘同步设计的 —— 历史文件保持静态，不会每次点一下就产生一堆新版本或冲突副本
 - 顺延 / 改期不需要跨文件事务：改写 `DateCurrent` 后，Save 会把它写进新日期、把旧日期文件清空（**保留空文件而不是删除**，同步盘对删除更敏感，历史日也需要知道这天存在过）
@@ -86,6 +97,16 @@ D:\workbuddy\todo\
 - `DAYTODO_DATA_DIR` 环境变量仍可重定向整个数据目录（隔离测试用）。设置后该实例会使用独立的单实例互斥与激活事件，**不会**被日常托盘实例挡住、也不会把它的窗口抢到前台；不设置时行为与以前完全一致
 - **卸载程序不会删除任务数据**；需要彻底清除请手动删 `%APPDATA%\DayTodo`
 - 找记录：设置 →「打开记录所在位置」会选中今天的文件；「打开备份目录」打开 `backups`。想导出/备份直接复制整个数据目录即可，网盘同步也指向这个目录
+
+### 随记
+
+随记和任务住在同一份按天文件里，但规则更严格：**写入只发生在真正的今天**，翻到历史或未来日期时底部不渲染输入框，跨零点会自动清空草稿并锁死。历史随记不可编辑、不可删除，界面按钮和 ViewModel 命令两层都拦住。
+
+一条随记是 `{ "Id", "Date", "CreatedAt", "Text", "References" }`：`Date` 创建后不再变，`CreatedAt` 是本地 `HH:mm:ss`（编辑保留原值），`Text` 是多行纯文本，没有标签和优先级。当天随记按时间正序显示，像日记一样往下读。
+
+`References` 是指向其他随记的链接：`{ "Date", "NoteId", "Text" }`。展示时按 `NoteId` 回读目标当前文本，目标已被删除时用 `Text` 快照兜底；点引用块会跳到被引用那天。引用只接受已存在的随记，不允许悬空链接。
+
+长随记默认折叠到约 3 行（超出显示省略号），点「展开全文」看完整内容，再点「收起」折回去。折叠状态只存在界面行模型里，不写进文件，列表刷新后回到折叠。
 
 > 当前定位是「**PC 写、云端存、别处读**」。程序只在启动时读取磁盘、运行中内存常驻，不会感知网盘从别处同步过来的改动；因此适合单向备份或「一端退出后另一端打开」，不建议两台电脑同时开着实时双写。
 
@@ -210,7 +231,7 @@ powershell -ExecutionPolicy Bypass -File build\publish.ps1 -Installer
 
 ## 测试与排错
 
-自动启动自检（`--verify` 会**真实显示主窗口**，模拟输入一条任务并按回车，确认任务真的写入，随后自动回滚整个数据目录，不会改动你的清单）：
+自动启动自检（`--verify` 会**真实显示主窗口**，模拟输入一条任务并按回车，再切到随记标签写一条、试引用和历史只读，最后自动回滚整个数据目录，不会改动你的清单）：
 
 ```powershell
 Remove-Item "$env:TEMP\DayTodo-verify.ok" -Force -ErrorAction SilentlyContinue
@@ -237,8 +258,12 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 | `RecallRemovedFromList` / `TasksAfterRecall` | 撤回后清单里没有这条、当天日文件也已写盘（计数减 1） |
 | `RecallKeepsLastOnly` / `RecallFirstGone` | 连续撤回两条时，编辑框只留最后一条，前一条已不在清单里 |
 | `RecallResent` / `RecallDraftCleared` / `RecallComposerCleared` | 改完重新发成功，草稿状态与输入框都已清空 |
+| `NoteTabVisible` / `NoteAdded` / `NoteEdited` | 切到随记标签、回车保存、当天编辑都真的生效 |
+| `QuoteSaved` / `NotesInDayFile` | 引用随保存写入日文件，条数与当天文件一致 |
+| `HistoryNoteReadOnly` / `HistoryRowNotEditable` / `HistoryEditButtonHidden` / `HistoryDeleteButtonHidden` | 历史随记只读：不能写入，编辑 / 删除按钮不渲染 |
+| `LongNoteCanFold` / `LongNoteInitiallyCollapsed` / `LongNoteExpanded` / `LongNoteCollapsedAgain` | 长随记默认折叠、展开、再次收起 |
 
-版本记录：1.0.1 修掉启动期绑定异常（`ProgressBar.Value` 默认双向绑定，绑定到只读计算属性 `Progress` 时 WPF 尝试回写并抛异常，已改为 `Mode=OneWay`）；1.0.2 重做添加栏（带边框的长输入框、框内提示文字、回车与按钮双通道），并把自检扩展为端到端交互测试；1.0.3 抽出设置面板，开机自启 / 记录位置 / MCP 端口令牌等操作全部收进设置，主界面左栏只留 MCP 服务一项；1.0.4 把全库单文件改成按天分片（`days\yyyy-MM-dd.json` + `manifest.json`），加入脏写、按日备份、单日损坏隔离与旧数据迁移，为网盘同步和将来的移动端读取预留文件布局；同时抽出 `CloudStore` 抽象接口（默认惰性、不含任何云端实现），并给每条任务加上「撤回」操作（拿回编辑框改完重发，编辑框只保留最后一条撤回）。
+版本记录：1.0.1 修掉启动期绑定异常（`ProgressBar.Value` 默认双向绑定，绑定到只读计算属性 `Progress` 时 WPF 尝试回写并抛异常，已改为 `Mode=OneWay`）；1.0.2 重做添加栏（带边框的长输入框、框内提示文字、回车与按钮双通道），并把自检扩展为端到端交互测试；1.0.3 抽出设置面板，开机自启 / 记录位置 / MCP 端口令牌等操作全部收进设置，主界面左栏只留 MCP 服务一项；1.0.4 把全库单文件改成按天分片（`days\yyyy-MM-dd.json` + `manifest.json`），加入脏写、按日备份、单日损坏隔离与旧数据迁移，为网盘同步和将来的移动端读取预留文件布局；同时抽出 `CloudStore` 抽象接口（默认惰性、不含任何云端实现），并给每条任务加上「撤回」操作（拿回编辑框改完重发，编辑框只保留最后一条撤回）。1.0.5 加入「随记」：按天归类、只能记今天、历史只读、支持跨天引用，和任务共用同一份日文件；1.0.6 加长随记折叠（约 3 行 / 展开 / 收起）并把版本号改成从 csproj 单一来源驱动打包；1.0.7 把随记接入 MCP，新增 5 个随记工具，让 AI 客户端也能读写、搜索随记。
 
 测试清单：
 
@@ -259,6 +284,9 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 15. 放一份旧版 `tasks.json` 进隔离数据目录后首次启动 → 自动按 `DateCurrent` 拆成日文件、生成 `manifest.json`，旧文件仍在
 16. 连续两次不改动数据的保存 → 所有日文件与 `manifest.json` 的修改时间都不变（脏写生效）
 17. 任务行点「撤回」→ 该条从清单消失、内容回到编辑框、提示条出现 → 改标题按回车 → 新的一条排回当天；连着撤回两条 → 编辑框只剩最后那条的内容
+18. 切到「随记」写一条长文本 → 默认只显示约 3 行 → 点「展开全文」看完整内容 → 点「收起」回到 3 行
+19. 翻到昨天 → 底部没有输入框、随记的编辑/删除按钮不显示；点历史随记「引用」→ 跳回今天并把引用插进编辑框，保存后按 ID 回读原文
+20. 让 AI 客户端通过 MCP 调 `create_note` / `search_notes` / `update_note` / `delete_note` → 界面立刻刷新；对历史随记的更新与删除应返回只读错误
 
 常见坑：
 
@@ -270,9 +298,9 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 - **数据写不进去**：确认 `%APPDATA%\DayTodo` 可写（企业策略可能重定向 AppData）。
 - **32 位系统**：产物是 `win-x64`，安装包也已限制 x64；Win10/11 32 位需改成 `win-x86` 重新发布。
 
-## MCP 服务：让 AI 客户端创建任务
+## MCP 服务：让 AI 客户端管理任务与随记
 
-MCP 服务**内嵌在 DayTodo 主程序里**：应用启动后自动在 `http://127.0.0.1:8765/mcp` 监听，WorkBuddy、Claude Desktop、Cline 等 AI 客户端可以直接往日清单里创建任务。工具操作的是主程序同一份内存数据，界面立刻刷新；不需要第二个 exe、不需要文件锁、也不需要外部转发。
+MCP 服务**内嵌在 DayTodo 主程序里**：应用启动后自动在 `http://127.0.0.1:8765/mcp` 监听，WorkBuddy、Claude Desktop、Cline 等 AI 客户端可以直接创建任务、记随记、搜索随记。工具操作的是主程序同一份内存数据，界面立刻刷新；不需要第二个 exe、不需要文件锁、也不需要外部转发。
 
 ### 界面开关
 
@@ -308,8 +336,13 @@ MCP 服务**内嵌在 DayTodo 主程序里**：应用启动后自动在 `http://
 | `complete_task` | 标记完成 / 撤销完成 | `id` 或 `title`、`undo` |
 | `delete_task` | 硬删除，不可恢复 | `id` 或 `title` |
 | `get_overview` | 今日总数 / 已完成 / 未完成 / 顺延数 | 无 |
+| `create_note` | 在今天的随记里记一条想法，可附带引用 | `text`（必填，最多 5000 字）、`references`（已存在随记的 ID 数组，也接受 `{id,date?,text?}`） |
+| `list_notes` | 查看某天（默认今天）的随记，返回 ID / 日期 / 时间 / 正文 / 引用 | `date`、`all`、`limit`（默认 100，上限 500） |
+| `search_notes` | 全文搜索，大小写不敏感，正文和引用文字都匹配，按日期倒序 | `query`（必填）、`from`、`to`、`limit` |
+| `update_note` | 改今天的随记正文和/或引用；至少给一项 | `id`（必填）、`text`、`references`、`clear_references` |
+| `delete_note` | 永久删除今天的随记，不可恢复 | `id`（必填） |
 
-历史日期只读，给过去日期创建任务会返回错误。`delete_task` 与主程序一样是立即硬删除，不进回收站。
+历史日期和历史随记都是只读：给过去日期建任务、修改或删除历史随记都会返回错误。随记只能写到真正的今天，引用必须是已存在的随记 ID（可用 `list_notes` / `search_notes` 取得），不允许悬空链接。`delete_task` / `delete_note` 都是立即硬删除，不进回收站。
 
 ### 在 WorkBuddy 里配置
 
@@ -323,14 +356,14 @@ MCP 服务**内嵌在 DayTodo 主程序里**：应用启动后自动在 `http://
     "daytodo": {
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp",
-      "description": "DayTodo 日清单：创建、查询、完成和删除每日任务"
+      "description": "DayTodo 日清单：管理每日任务与随记"
     }
   }
 }
 ```
 
 2. 在连接器管理里找到 `daytodo`，点「信任」并启用，状态变绿即连接成功。
-3. 重启 WorkBuddy 客户端（改 `mcp.json` 后需重启才会加载），之后直接用自然语言说「帮我加个任务：……」即可。
+3. 重启 WorkBuddy 客户端（改 `mcp.json` 后需重启才会加载），之后直接用自然语言说「帮我加个任务：……」或「把刚才的想法记到随记里，搜一下之前有没有类似的」即可。
 
 WorkBuddy 的 Streamable HTTP 类型固定写 `"type": "http"`；Cline、Claude Desktop 等客户端可能写 `"streamableHttp"`，也常可省略 `type` 由 `url` 自动推断。启用 token 时加 `"headers": { "Authorization": "Bearer <令牌>" }`。CLI 用户可执行 `codebuddy mcp add-json --scope user daytodo '{"type":"http","url":"http://127.0.0.1:8765/mcp"}'`。
 
@@ -345,13 +378,28 @@ curl -X POST http://127.0.0.1:8765/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_task","arguments":{"title":"用 AI 加的任务"}}}'
 ```
 
+记一条随记、再搜一下：
+
+```bash
+curl -X POST http://127.0.0.1:8765/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_note","arguments":{"text":"今天想到一个点子"}}}'
+
+curl -X POST http://127.0.0.1:8765/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_notes","arguments":{"query":"点子"}}}'
+```
+
 端点行为：`POST` 返回 JSON（只接受 `text/event-stream` 时返回 SSE），通知返回 202，`GET` 返回 405，`DELETE` 结束会话。
 
 ### 实现位置
 
 - `src\DayTodo\Mcp\McpServer.cs`：MCP JSON-RPC 2.0（initialize / tools/list / tools/call / ping）
 - `src\DayTodo\Mcp\McpHttpHost.cs`：Streamable HTTP，TcpListener 手写，零 NuGet 依赖
-- `src\DayTodo\Mcp\McpTaskService.cs`：工具的数据操作，切到 UI 线程后走 `DataStore.Save` + `Rebuild`
+- `src\DayTodo\Mcp\McpTaskService.cs`：任务工具的数据操作，切到 UI 线程后走 `DataStore.Save` + `Rebuild`
+- `src\DayTodo\Mcp\McpNoteService.cs`：随记工具的同一套数据操作；只写今天、历史只读、引用按 ID 解析
 - `src\DayTodo\Mcp\McpSettings.cs`：开关状态持久化
 
 数据仍是同一份内存 `AppData`，落盘时按天分片（见「数据」章节）。因为只有一个进程写，不再需要跨进程锁、乐观重试或 FileSystemWatcher —— 这也意味着程序**不会**感知网盘从别处同步过来的文件改动。当前定位是「PC 写、云端存、别处读」：适合单向备份或一端退出后另一端打开，不适合两台电脑同时开着实时双写。
