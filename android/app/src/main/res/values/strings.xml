@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DayTodo 日清单</string>
+    <string name="reminder_channel_name">每日提醒</string>
+    <string name="reminder_channel_description">提醒查看今天的清单</string>
+</resources>
