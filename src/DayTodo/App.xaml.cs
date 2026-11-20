@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
@@ -53,14 +54,30 @@ public partial class App : Application, ISettingsHost
         }
     }
 
+    /// <summary>
+    /// DAYTODO_DATA_DIR marks an isolated instance (smoke tests, a second data set).
+    /// Give it its own mutex and activation event so it neither gets blocked by nor
+    /// steals focus from the user's everyday tray instance. Default installs keep
+    /// the original names and the original single-instance behaviour.
+    /// </summary>
+    private static string InstanceScope()
+    {
+        var dir = Environment.GetEnvironmentVariable("DAYTODO_DATA_DIR");
+        if (string.IsNullOrWhiteSpace(dir)) return string.Empty;
+        var bytes = System.Text.Encoding.UTF8.GetBytes(dir.Trim().ToUpperInvariant());
+        var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+        return "." + Convert.ToHexString(hash).Substring(0, 8);
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         var createdNew = false;
         try
         {
-            _mutex = new Mutex(true, @"Local\DayTodo.SingleInstance", out createdNew);
+            var scope = InstanceScope();
+            _mutex = new Mutex(true, @"Local\DayTodo.SingleInstance" + scope, out createdNew);
             _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset,
-                @"Local\DayTodo.Activate", out _);
+                @"Local\DayTodo.Activate" + scope, out _);
             if (!createdNew)
             {
                 _activateEvent.Set();
@@ -88,7 +105,7 @@ public partial class App : Application, ISettingsHost
             _mcpSettings = McpSettings.Load();
 
             _window = new MainWindow();
-            _vm = new MainViewModel(data, ShowBalloon, _window.PickMoveDate);
+            _vm = new MainViewModel(data, ShowBalloon, _window.PickMoveDate, _window.FocusTitleBox);
             _window.DataContext = _vm;
             MainWindow = _window;
 
@@ -106,21 +123,18 @@ public partial class App : Application, ISettingsHost
             if (moved > 0) ShowBalloon($"{moved} 项未完成任务已顺延到今天");
 
             // Smoke-test hook: --verify shows the window (so binding errors surface),
-            // simulates typing + Enter, checks the task was added, then rolls the data
-            // file back so the user's list is never changed.
+            // simulates typing + Enter, checks the task was added, then restores the
+            // whole data directory from a snapshot so the user's list is never changed.
             if (Array.IndexOf(e.Args, "--verify") >= 0)
             {
                 var marker = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "DayTodo-verify.ok");
                 var log = new System.Text.StringBuilder();
                 log.AppendLine("OK " + typeof(App).Assembly.GetName().Version + " " + DateTime.Now.ToString("O"));
 
-                var dataPath = DataStore.DataFilePath;
-                var before = System.IO.File.Exists(dataPath) ? System.IO.File.ReadAllText(dataPath) : null;
-                var backupDir = System.IO.Path.Combine(DataStore.DataDir, "backups");
-                var backupsBefore = new System.Collections.Generic.HashSet<string>(
-                    System.IO.Directory.Exists(backupDir)
-                        ? System.IO.Directory.GetFiles(backupDir)
-                        : Array.Empty<string>());
+                var snapshot = SnapshotDataDir();
+                log.AppendLine("SnapshotFiles=" + snapshot.Count);
+                log.AppendLine("DayFiles=" + DataStore.DayFileCount());
+                log.AppendLine("ManifestExists=" + System.IO.File.Exists(DataStore.ManifestPath));
 
                 try
                 {
@@ -143,8 +157,73 @@ public partial class App : Application, ISettingsHost
                     box.RaiseEvent(keyEvent);
                     log.AppendLine("EnterHandled=" + keyEvent.Handled);
 
-                    using var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(dataPath));
+                    using var doc = System.Text.Json.JsonDocument.Parse(
+                        System.IO.File.ReadAllText(DataStore.TodayFilePath));
                     log.AppendLine("TasksAfterEnter=" + doc.RootElement.GetProperty("Tasks").GetArrayLength());
+
+                    // Recall: the plan leaves the list and lands in the editor, where it
+                    // can be changed and sent again. Recalling twice keeps only the last.
+                    System.Func<System.Windows.Input.KeyEventArgs> enterKey = () =>
+                    {
+                        var src = System.Windows.PresentationSource.FromVisual(box);
+                        var args = new System.Windows.Input.KeyEventArgs(
+                            System.Windows.Input.Keyboard.PrimaryDevice, src,
+                            Environment.TickCount, System.Windows.Input.Key.Enter)
+                        { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent };
+                        box.RaiseEvent(args);
+                        return args;
+                    };
+
+                    var first = _vm.Rows.FirstOrDefault(r => r.Title == "自检任务");
+                    log.AppendLine("RecallRowFound=" + (first != null));
+                    if (first != null)
+                    {
+                        // The row template really renders a 撤回 button, and it is bound.
+                        // Checked before the recall: afterwards the row is gone.
+                        _window.UpdateLayout();
+                        var recallButton = FindRecallButton();
+                        log.AppendLine("RecallButtonRendered=" + (recallButton != null));
+                        log.AppendLine("RecallButtonVisible=" +
+                            (recallButton?.Visibility == System.Windows.Visibility.Visible));
+                        log.AppendLine("RecallButtonCommand=" + (recallButton?.Command != null));
+
+                        _vm.RecallRow(first);
+                        log.AppendLine("RecallComposerTitle=" + _vm.NewTitle);
+                        log.AppendLine("RecallDraftPending=" + _vm.HasRecalledDraft);
+                        log.AppendLine("RecallHintText=" + _vm.RecalledHintText);
+                        log.AppendLine("RecallRemovedFromList=" +
+                            !_vm.Rows.Any(r => r.Title == "自检任务"));
+
+                        // The recall has to reach the disk as well: the day file must
+                        // no longer contain the recalled plan.
+                        using var afterRecall = System.Text.Json.JsonDocument.Parse(
+                            System.IO.File.ReadAllText(DataStore.TodayFilePath));
+                        log.AppendLine("TasksAfterRecall=" +
+                            afterRecall.RootElement.GetProperty("Tasks").GetArrayLength());
+
+                        _window.UpdateLayout();
+                        var hint = _window.FindName("RecallHint") as System.Windows.FrameworkElement;
+                        log.AppendLine("RecallHintVisible=" +
+                            (hint?.Visibility == System.Windows.Visibility.Visible));
+                    }
+
+                    box.Text = "自检任务二";
+                    enterKey();
+                    var second = _vm.Rows.FirstOrDefault(r => r.Title == "自检任务二");
+                    if (second != null)
+                    {
+                        _vm.RecallRow(second);
+                        log.AppendLine("RecallKeepsLastOnly=" + (_vm.NewTitle == "自检任务二"));
+                        log.AppendLine("RecallFirstGone=" +
+                            !_vm.Rows.Any(r => r.Title == "自检任务"));
+                    }
+
+                    // Send the recalled plan again, with a changed title.
+                    box.Text = "自检任务二改";
+                    enterKey();
+                    log.AppendLine("RecallResent=" + _vm.Rows.Any(r => r.Title == "自检任务二改"));
+                    log.AppendLine("RecallDraftCleared=" + !_vm.HasRecalledDraft);
+                    log.AppendLine("RecallComposerCleared=" + (_vm.NewTitle.Length == 0));
                 }
                 catch (Exception ex)
                 {
@@ -152,18 +231,7 @@ public partial class App : Application, ISettingsHost
                 }
                 finally
                 {
-                    try
-                    {
-                        if (before != null)
-                            System.IO.File.WriteAllText(dataPath, before, new System.Text.UTF8Encoding(false));
-                        else if (System.IO.File.Exists(dataPath))
-                            System.IO.File.Delete(dataPath);
-
-                        if (System.IO.Directory.Exists(backupDir))
-                            foreach (var f in System.IO.Directory.GetFiles(backupDir))
-                                if (!backupsBefore.Contains(f))
-                                    try { System.IO.File.Delete(f); } catch (Exception) { }
-                    }
+                    try { RestoreDataDir(snapshot); }
                     catch (Exception ex) { log.AppendLine("ROLLBACK-ERROR " + ex.Message); }
                 }
 
@@ -183,6 +251,7 @@ public partial class App : Application, ISettingsHost
                     log.AppendLine("SettingsEndpoint=" + settingsVm.McpEndpoint);
                     log.AppendLine("SettingsStatus=" + settingsVm.McpStatusText);
                     log.AppendLine("SettingsVersion=" + settingsVm.VersionText);
+                    log.AppendLine("SettingsDaysDir=" + settingsVm.DaysDirPath);
                     settingsWin.Close();
                 }
                 catch (Exception ex)
@@ -224,6 +293,52 @@ public partial class App : Application, ISettingsHost
                     }
                 }
 
+                // CloudStore is a contract only at this point: check that the default
+                // is inert, and that the local-folder reference implementation can
+                // round-trip a manifest-shaped blob without any network access.
+                log.AppendLine("CloudStoreProvider=" + CloudStoreProvider.Current.Provider);
+                log.AppendLine("CloudStoreEnabled=" + CloudStoreProvider.Current.IsEnabled);
+                try
+                {
+                    var probeDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                        "DayTodo-cloudstore-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                    var probe = new LocalFolderCloudStore(probeDir);
+                    var payload = new System.Text.UTF8Encoding(false)
+                        .GetBytes("{\"Layout\":\"per-day\"}");
+
+                    log.AppendLine("CloudStorePut=" +
+                        probe.PutAsync("manifest.json", payload).GetAwaiter().GetResult());
+                    log.AppendLine("CloudStoreDirtyWriteSkipped=" +
+                        !probe.PutAsync("manifest.json", payload).GetAwaiter().GetResult());
+
+                    var listed = probe.ListAsync().GetAwaiter().GetResult();
+                    var got = probe.GetAsync("manifest.json").GetAwaiter().GetResult();
+                    log.AppendLine("CloudStoreList=" + listed.Count);
+                    log.AppendLine("CloudStoreRoundTrip=" +
+                        (listed.Count == 1 && listed[0].Name == "manifest.json" &&
+                         !string.IsNullOrEmpty(listed[0].Sha256) &&
+                         got != null && got.AsSpan().SequenceEqual(payload)));
+                    log.AppendLine("CloudStoreMissingIsNull=" +
+                        (probe.GetAsync("missing.json").GetAwaiter().GetResult() == null));
+
+                    var rejected = false;
+                    try { probe.GetAsync("..\\evil.json").GetAwaiter().GetResult(); }
+                    catch (ArgumentException) { rejected = true; }
+                    log.AppendLine("CloudStoreRejectsTraversal=" + rejected);
+
+                    var nullRejected = false;
+                    try { NullCloudStore.Instance.PutAsync("x.json", payload).GetAwaiter().GetResult(); }
+                    catch (NotSupportedException) { nullRejected = true; }
+                    log.AppendLine("CloudStoreNullRejectsPut=" + nullRejected);
+
+                    try { System.IO.Directory.Delete(probeDir, true); }
+                    catch (Exception) { }
+                }
+                catch (Exception ex)
+                {
+                    log.AppendLine("CLOUDSTORE-ERROR " + ex.Message);
+                }
+
                 System.IO.File.WriteAllText(marker, log.ToString());
                 Shutdown();
             }
@@ -241,6 +356,35 @@ public partial class App : Application, ISettingsHost
         MessageBox.Show("程序出现异常：" + e.Exception.Message, "DayTodo",
             MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;
+    }
+
+    /// <summary>Finds the 撤回 button inside the first rendered task row.</summary>
+    private System.Windows.Controls.Button? FindRecallButton()
+    {
+        var list = _window?.FindName("TaskList") as System.Windows.Controls.ListBox;
+        if (list == null) return null;
+
+        var container = list.ItemContainerGenerator.ContainerFromIndex(0)
+            as System.Windows.Controls.ListBoxItem;
+        if (container == null) return null;
+
+        return FindVisual<System.Windows.Controls.Button>(container,
+            b => (b.Content as string) == "撤回");
+    }
+
+    /// <summary>Depth-first search of the visual tree for the first matching element.</summary>
+    private static T? FindVisual<T>(System.Windows.DependencyObject parent,
+        Func<T, bool>? match = null) where T : System.Windows.DependencyObject
+    {
+        var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent);
+        for (var i = 0; i < count; i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is T typed && (match == null || match(typed))) return typed;
+            var found = FindVisual<T>(child, match);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private void InitTray()
@@ -475,6 +619,50 @@ public partial class App : Application, ISettingsHost
             return (int)response.StatusCode;
         }
         catch (Exception) { return 0; }
+    }
+
+    /// <summary>
+    /// Captures every file under the data directory so --verify can put the whole
+    /// store back exactly: day files, manifest, per-day backups and settings alike.
+    /// </summary>
+    private static System.Collections.Generic.Dictionary<string, byte[]> SnapshotDataDir()
+    {
+        var result = new System.Collections.Generic.Dictionary<string, byte[]>(
+            StringComparer.OrdinalIgnoreCase);
+        var root = DataStore.DataDir;
+        if (!System.IO.Directory.Exists(root)) return result;
+
+        foreach (var f in System.IO.Directory.GetFiles(root, "*", System.IO.SearchOption.AllDirectories))
+        {
+            try { result[f] = System.IO.File.ReadAllBytes(f); }
+            catch (Exception) { }
+        }
+        return result;
+    }
+
+    private static void RestoreDataDir(
+        System.Collections.Generic.Dictionary<string, byte[]> snapshot)
+    {
+        var root = DataStore.DataDir;
+        if (!System.IO.Directory.Exists(root)) return;
+
+        foreach (var f in System.IO.Directory.GetFiles(root, "*", System.IO.SearchOption.AllDirectories))
+        {
+            if (snapshot.ContainsKey(f)) continue;
+            try { System.IO.File.Delete(f); }
+            catch (Exception) { }
+        }
+
+        foreach (var pair in snapshot)
+        {
+            try
+            {
+                var dir = System.IO.Path.GetDirectoryName(pair.Key);
+                if (!string.IsNullOrEmpty(dir)) System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.WriteAllBytes(pair.Key, pair.Value);
+            }
+            catch (Exception) { }
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

@@ -185,6 +185,21 @@ public partial class MainWindow : Window
         if (!TitleBox.IsKeyboardFocusWithin) TitleBox.Focus();
     }
 
+    /// <summary>
+    /// Called right after a plan is recalled: the editor now holds that plan,
+    /// so put the caret there and let the user edit it straight away.
+    /// </summary>
+    public void FocusTitleBox()
+    {
+        if (!IsVisible) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!IsVisible) return;
+            TitleBox.Focus();
+            TitleBox.CaretIndex = TitleBox.Text.Length;
+        }));
+    }
+
     // Belt-and-braces: keep CanAdd in sync even if the binding is ever lost.
     private void TitleBox_TextChanged(object sender, TextChangedEventArgs e)
     {

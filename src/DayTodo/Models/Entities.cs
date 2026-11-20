@@ -27,11 +27,49 @@ public sealed class TaskItem
     public int PostponeDays { get; set; }
 }
 
+/// <summary>
+/// The in-memory shape shared by the window and the MCP tools. It is never written
+/// to disk as a whole: DataStore splits it into one file per day.
+/// </summary>
 public sealed class AppData
 {
-    public int SchemaVersion { get; set; } = 1;
+    public List<TaskItem> Tasks { get; set; } = new();
+}
+
+/// <summary>One calendar day = one self-contained file: days/yyyy-MM-dd.json.</summary>
+public sealed class DayFile
+{
+    public int SchemaVersion { get; set; } = 2;
+
+    /// <summary>yyyy-MM-dd; matches the file name.</summary>
+    public string Date { get; set; } = string.Empty;
 
     public List<TaskItem> Tasks { get; set; } = new();
+}
 
-    public string LastRolloverDate { get; set; } = string.Empty;
+/// <summary>
+/// PC-owned index of the day files. A future reader (web/mobile) can fetch this one
+/// small file and use Sha256 to work out which days it still has to download.
+/// It deliberately has no timestamp: identical content means an identical file, so
+/// unchanged saves never touch it and cloud-sync clients see no spurious versions.
+/// </summary>
+public sealed class StoreManifest
+{
+    public int SchemaVersion { get; set; } = 2;
+
+    public string Layout { get; set; } = "per-day";
+
+    public List<ManifestDay> Days { get; set; } = new();
+}
+
+public sealed class ManifestDay
+{
+    public string Date { get; set; } = string.Empty;
+
+    public string File { get; set; } = string.Empty;
+
+    public int Count { get; set; }
+
+    /// <summary>Lowercase hex SHA-256 of the raw file bytes.</summary>
+    public string Sha256 { get; set; } = string.Empty;
 }

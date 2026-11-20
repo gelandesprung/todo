@@ -59,6 +59,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly AppData _data;
     private readonly Action<string>? _notify;
     private readonly Func<DateTime, DateTime?>? _pickDate;
+    private readonly Action? _focusEditor;
     private DateTime _selectedDate = DateTime.Today;
     private string _newTitle = string.Empty;
     private string _newTags = string.Empty;
@@ -72,6 +73,12 @@ public sealed class MainViewModel : ObservableObject
     private DateTime? _nextFutureDate;
     private int _futureCount;
 
+    /// <summary>The plan that was recalled and is waiting in the editor to be sent again.</summary>
+    private TaskItem? _draft;
+
+    /// <summary>True while the editor holds a recalled plan.</summary>
+    private bool _draftPending;
+
     public ObservableCollection<TaskRowViewModel> Rows { get; } = new();
 
     public ICommand PrevDayCommand { get; }
@@ -82,11 +89,12 @@ public sealed class MainViewModel : ObservableObject
     public ICommand GoToFutureCommand { get; }
 
     public MainViewModel(AppData data, Action<string>? notify = null,
-        Func<DateTime, DateTime?>? pickDate = null)
+        Func<DateTime, DateTime?>? pickDate = null, Action? focusEditor = null)
     {
         _data = data;
         _notify = notify;
         _pickDate = pickDate;
+        _focusEditor = focusEditor;
 
         PrevDayCommand = new RelayCommand(_ => MoveDay(-1));
         NextDayCommand = new RelayCommand(_ => MoveDay(1));
@@ -142,8 +150,20 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _newTitle, value)) return;
             OnPropertyChanged(nameof(CanAdd));
             OnPropertyChanged(nameof(TitleHintVisible));
+
+            // Clearing the box by hand abandons the recalled draft: there is
+            // nothing left to send again, so the hint must go away as well.
+            if (string.IsNullOrWhiteSpace(value) && _draftPending) ApplyDraft(null);
         }
     }
+
+    /// <summary>True while the editor holds a recalled plan waiting to be sent again.</summary>
+    public bool HasRecalledDraft => _draftPending;
+
+    /// <summary>Explains the editor content: it came from a recall, not from a new plan.</summary>
+    public string RecalledHintText => _draftPending && _draft != null
+        ? "已撤回「" + _draft.Title + "」，可修改后重新发送"
+        : string.Empty;
 
     public string NewTags
     {
@@ -251,7 +271,51 @@ public sealed class MainViewModel : ObservableObject
 
         NewTitle = string.Empty;
         NewTags = string.Empty;
+
+        // A recalled plan that gets sent again is a plan again: the draft slot is free.
+        ApplyDraft(null);
+
         Commit();
+    }
+
+    /// <summary>
+    /// Takes a plan back out of the list and drops its content into the editor.
+    ///
+    /// The editor holds one draft at a time: recalling another plan replaces the
+    /// draft, so after several recalls in a row only the last one can be edited
+    /// and sent again. The plans recalled earlier are gone from the list - that is
+    /// what the user asked for by clicking 撤回, and there is no draft pile-up
+    /// to sort through either.
+    /// </summary>
+    private bool Recall(TaskRowViewModel row)
+    {
+        if (!CanEdit) return false;
+        var t = row.Model;
+
+        _data.Tasks.Remove(t);
+
+        NewTitle = t.Title;
+        NewTags = string.Join(", ", t.Tags);
+        NewPriority = t.Priority;
+        ApplyDraft(t);
+
+        Commit();
+
+        _focusEditor?.Invoke();
+        _notify?.Invoke("已撤回「" + t.Title + "」，可在下方修改后重新发送");
+        return true;
+    }
+
+    /// <summary>Public entry point used by the --verify smoke test.</summary>
+    public bool RecallRow(TaskRowViewModel row) => Recall(row);
+
+    /// <summary>Holds (or releases) the single recalled plan waiting in the editor.</summary>
+    private void ApplyDraft(TaskItem? draft)
+    {
+        _draft = draft;
+        _draftPending = draft != null;
+        OnPropertyChanged(nameof(HasRecalledDraft));
+        OnPropertyChanged(nameof(RecalledHintText));
     }
 
     private void Toggle(TaskRowViewModel row)
@@ -327,7 +391,7 @@ public sealed class MainViewModel : ObservableObject
         var rows = _data.Tasks
             .Where(t => AppearsOn(t, sel, today))
             .Select(t => new TaskRowViewModel(t, sel, today, editable,
-                Toggle, Delete, MoveTask, BringToToday))
+                Toggle, Delete, row => Recall(row), MoveTask, BringToToday))
             .OrderBy(r => r.IsDone ? 1 : 0)
             .ThenByDescending(r => r.Model.Priority)
             .ThenBy(r => r.Model.DateOrigin, StringComparer.Ordinal)
@@ -413,17 +477,20 @@ public sealed class TaskRowViewModel : ObservableObject
 
     private readonly Action<TaskRowViewModel> _toggle;
     private readonly Action<TaskRowViewModel> _delete;
+    private readonly Action<TaskRowViewModel> _recall;
     private readonly Action<TaskRowViewModel> _move;
     private readonly Action<TaskRowViewModel> _bringToToday;
 
     public TaskRowViewModel(TaskItem model, string sel, string today, bool canEdit,
         Action<TaskRowViewModel> toggle, Action<TaskRowViewModel> delete,
+        Action<TaskRowViewModel> recall,
         Action<TaskRowViewModel> move, Action<TaskRowViewModel> bringToToday)
     {
         Model = model;
         CanEdit = canEdit;
         _toggle = toggle;
         _delete = delete;
+        _recall = recall;
         _move = move;
         _bringToToday = bringToToday;
 
@@ -431,6 +498,7 @@ public sealed class TaskRowViewModel : ObservableObject
 
         ToggleCommand = new RelayCommand(_ => _toggle(this), _ => canEdit);
         DeleteCommand = new RelayCommand(_ => _delete(this), _ => canEdit);
+        RecallCommand = new RelayCommand(_ => _recall(this), _ => canEdit);
         MoveCommand = new RelayCommand(_ => _move(this), _ => CanMove);
         BringToTodayCommand = new RelayCommand(_ => _bringToToday(this), _ => CanBringToToday);
 
@@ -472,6 +540,7 @@ public sealed class TaskRowViewModel : ObservableObject
 
     public ICommand ToggleCommand { get; }
     public ICommand DeleteCommand { get; }
+    public ICommand RecallCommand { get; }
     public ICommand MoveCommand { get; }
     public ICommand BringToTodayCommand { get; }
 

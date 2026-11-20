@@ -1,12 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Linq;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
 using Microsoft.Win32;
 using DayTodo.Models;
 
@@ -36,131 +31,14 @@ internal static class DateUtil
     }
 }
 
-public static class DataStore
-{
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        PropertyNameCaseInsensitive = true
-    };
-
-    /// <summary>DAYTODO_DATA_DIR can redirect storage, e.g. for isolated smoke tests.</summary>
-    public static string DataDir
-    {
-        get
-        {
-            var custom = Environment.GetEnvironmentVariable("DAYTODO_DATA_DIR");
-            return string.IsNullOrWhiteSpace(custom)
-                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DayTodo")
-                : custom;
-        }
-    }
-
-    public static string DataFilePath => Path.Combine(DataDir, "tasks.json");
-
-    private static string BackupDir => Path.Combine(DataDir, "backups");
-
-    public static AppData Load()
-    {
-        try
-        {
-            Directory.CreateDirectory(DataDir);
-            if (!File.Exists(DataFilePath)) return new AppData();
-
-            var json = File.ReadAllText(DataFilePath, Encoding.UTF8);
-            var data = JsonSerializer.Deserialize<AppData>(json, JsonOptions) ?? new AppData();
-            Sanitize(data);
-            return data;
-        }
-        catch (Exception)
-        {
-            QuarantineCorruptFile();
-            return RestoreLatestBackup() ?? new AppData();
-        }
-    }
-
-    private static void Sanitize(AppData data)
-    {
-        var today = DateUtil.Today();
-        data.Tasks ??= new List<TaskItem>();
-        data.Tasks.RemoveAll(t => string.IsNullOrWhiteSpace(t.Title));
-        foreach (var t in data.Tasks)
-        {
-            if (t.Id == Guid.Empty) t.Id = Guid.NewGuid();
-            if (!DateUtil.IsValid(t.DateOrigin)) t.DateOrigin = today;
-            if (!DateUtil.IsValid(t.DateCurrent)) t.DateCurrent = t.DateOrigin;
-            if (t.DateCompleted != null && !DateUtil.IsValid(t.DateCompleted)) t.DateCompleted = null;
-            if (t.Priority < 0 || t.Priority > 2) t.Priority = 1;
-            if (t.PostponeDays < 0) t.PostponeDays = 0;
-            t.Tags ??= new List<string>();
-        }
-    }
-
-    private static void QuarantineCorruptFile()
-    {
-        try
-        {
-            var bad = Path.Combine(DataDir, "tasks.corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json");
-            File.Move(DataFilePath, bad, true);
-        }
-        catch (Exception) { }
-    }
-
-    private static AppData? RestoreLatestBackup()
-    {
-        try
-        {
-            if (!Directory.Exists(BackupDir)) return null;
-            var latest = Directory.GetFiles(BackupDir, "tasks-*.json")
-                .OrderByDescending(f => f).FirstOrDefault();
-            if (latest == null) return null;
-            var data = JsonSerializer.Deserialize<AppData>(File.ReadAllText(latest, Encoding.UTF8), JsonOptions);
-            if (data == null) return null;
-            Sanitize(data);
-            return data;
-        }
-        catch (Exception) { return null; }
-    }
-
-    /// <summary>Atomic replace + keep the 7 most recent backups.</summary>
-    public static void Save(AppData data)
-    {
-        Directory.CreateDirectory(DataDir);
-        Directory.CreateDirectory(BackupDir);
-
-        var tmp = DataFilePath + ".tmp";
-        var json = JsonSerializer.Serialize(data, JsonOptions);
-        File.WriteAllText(tmp, json, new UTF8Encoding(false));
-
-        if (File.Exists(DataFilePath))
-        {
-            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmm");
-            var backup = Path.Combine(BackupDir, "tasks-" + stamp + ".json");
-            if (!File.Exists(backup))
-            {
-                try { File.Copy(DataFilePath, backup, true); }
-                catch (Exception) { }
-            }
-
-            try
-            {
-                var old = Directory.GetFiles(BackupDir, "tasks-*.json")
-                    .OrderByDescending(f => f).Skip(7).ToArray();
-                foreach (var f in old) File.Delete(f);
-            }
-            catch (Exception) { }
-        }
-
-        File.Move(tmp, DataFilePath, true);
-    }
-}
-
 public static class RolloverService
 {
     /// <summary>
     /// Unfinished tasks scheduled before today are moved to today and accumulate
     /// carry-over days. Tasks planned in the future are left alone.
+    ///
+    /// Idempotent: it only looks at DateCurrent, so the old "last rollover date"
+    /// global field was redundant and is gone with the per-day storage layout.
     /// </summary>
     public static int Run(AppData data, string today)
     {
@@ -177,7 +55,6 @@ public static class RolloverService
             t.DateCurrent = today;
             changed++;
         }
-        data.LastRolloverDate = today;
         return changed;
     }
 }
@@ -243,27 +120,27 @@ public static class TaskScheduleService
         task.DateCompleted == null && DateUtil.Compare(task.DateOrigin, today) > 0;
 }
 
-/// <summary>Reveals the raw task data file in Explorer.</summary>
+/// <summary>Reveals the raw task data in Explorer.</summary>
 public static class DataLocationService
 {
-    public static string BackupDir => Path.Combine(DataStore.DataDir, "backups");
+    public static string BackupDir => DataStore.BackupDir;
 
-    /// <summary>Opens Explorer and selects tasks.json (or just the folder if it doesn't exist yet).</summary>
+    /// <summary>Selects today's yyyy-MM-dd.json, or opens the days folder if it is not there yet.</summary>
     public static void OpenDataLocation()
     {
-        Directory.CreateDirectory(DataStore.DataDir);
+        Directory.CreateDirectory(DataStore.DaysDir);
+        var file = DataStore.TodayFilePath;
         var psi = new ProcessStartInfo
         {
             FileName = "explorer.exe",
             UseShellExecute = true,
-            Arguments = File.Exists(DataStore.DataFilePath)
-                ? "/select,\"" + DataStore.DataFilePath + "\""
-                : "\"" + DataStore.DataDir + "\""
+            Arguments = File.Exists(file)
+                ? "/select,\"" + file + "\""
+                : "\"" + DataStore.DaysDir + "\""
         };
         Process.Start(psi);
     }
 
-    /// <summary>Opens the rolling backup folder (one file per save, 7 kept).</summary>
     public static void OpenBackupLocation()
     {
         Directory.CreateDirectory(BackupDir);

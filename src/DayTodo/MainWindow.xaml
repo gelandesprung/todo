@@ -90,6 +90,10 @@
                                 Command="{Binding MoveCommand}"
                                 ToolTip="移动到今天或未来的某一天"
                                 Visibility="{Binding CanMove, Converter={StaticResource BoolVis}}" />
+                        <Button Content="撤回" Style="{StaticResource RowActionButton}" Margin="6,0,0,0"
+                                Command="{Binding RecallCommand}"
+                                ToolTip="撤回这条计划，放回下方编辑框，可修改后重新发送"
+                                Visibility="{Binding CanEdit, Converter={StaticResource BoolVis}}" />
                         <Button Content="删除" Style="{StaticResource DeleteButton}" Margin="8,0,0,0"
                                 Command="{Binding DeleteCommand}"
                                 Visibility="{Binding CanEdit, Converter={StaticResource BoolVis}}" />
@@ -318,7 +322,7 @@
                     </StackPanel>
 
                     <Grid Grid.Row="1" Margin="20,12,20,8">
-                        <ListBox ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource TaskListItem}"
+                        <ListBox x:Name="TaskList" ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource TaskListItem}"
                                  Background="Transparent" BorderThickness="0"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
@@ -338,14 +342,27 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
+                            <!-- 撤回提示：编辑框里现在是撤回回来的内容，改完可以重新发。 -->
+                            <StackPanel x:Name="RecallHint" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                                        Orientation="Horizontal" Margin="0,0,0,7"
+                                        Visibility="{Binding HasRecalledDraft, Converter={StaticResource BoolVis}}">
+                                <Border Background="{StaticResource AccentLight}" CornerRadius="4"
+                                        Padding="7,2" VerticalAlignment="Center">
+                                    <TextBlock Text="撤回" FontSize="10.5" Foreground="{StaticResource AccentDark}" />
+                                </Border>
+                                <TextBlock Text="{Binding RecalledHintText}" FontSize="11" Margin="7,0,0,0"
+                                           Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" />
+                            </StackPanel>
+
                             <!-- Full-width, visibly bordered input. Clicking anywhere focuses the TextBox. -->
-                            <Border Grid.Row="0" Grid.Column="0" Height="38"
+                            <Border Grid.Row="1" Grid.Column="0" Height="38"
                                     BorderBrush="#DCDAD2" BorderThickness="1" CornerRadius="6"
                                     Background="#FFFFFF" Cursor="IBeam"
                                     MouseLeftButtonDown="InputArea_MouseDown">
@@ -363,11 +380,11 @@
                                 </Grid>
                             </Border>
 
-                            <Button x:Name="AddButton" Grid.Row="0" Grid.Column="1" Margin="10,0,0,0"
+                            <Button x:Name="AddButton" Grid.Row="1" Grid.Column="1" Margin="10,0,0,0"
                                     Width="78" Height="38" Content="添加" Style="{StaticResource PrimaryButton}"
                                     IsEnabled="{Binding CanAdd}" Command="{Binding AddCommand}" />
 
-                            <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                            <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
                                         Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
                                 <TextBlock Text="标签" FontSize="11" Foreground="{StaticResource TextMuted}"
                                            VerticalAlignment="Center" Margin="2,0,8,0" />

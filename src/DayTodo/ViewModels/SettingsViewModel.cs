@@ -164,7 +164,14 @@ public sealed class SettingsViewModel : ObservableObject
 
     public string DataDirPath => DataStore.DataDir;
 
-    public string DataFilePath => DataStore.DataFilePath;
+    /// <summary>One JSON file per day; point a cloud-sync client at this folder.</summary>
+    public string DaysDirPath => DataStore.DaysDir;
+
+    /// <summary>Today's day file, selected by "open record location".</summary>
+    public string TodayFilePath => DataStore.TodayFilePath;
+
+    /// <summary>PC-owned index a future reader can use to compute deltas.</summary>
+    public string ManifestFilePath => DataStore.ManifestPath;
 
     public string BackupDirPath => DataLocationService.BackupDir;
 

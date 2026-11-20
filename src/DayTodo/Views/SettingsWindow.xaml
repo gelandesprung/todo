@@ -158,9 +158,13 @@
                             <TextBlock Text="数据" Style="{StaticResource SectionTitle}" />
 
                             <TextBlock Text="任务记录" Style="{StaticResource SettingLabel}" />
-                            <TextBlock Text="纯文本 JSON，可直接复制或用其他工具加工"
+                            <TextBlock Text="每天一个 JSON 文件放在 days 目录，manifest.json 是索引；整个数据目录可直接交给网盘同步"
                                        Style="{StaticResource SettingHint}" />
-                            <TextBlock Text="{Binding DataFilePath}" Style="{StaticResource SettingHint}"
+                            <TextBlock Text="{Binding DaysDirPath}" Style="{StaticResource SettingHint}"
+                                       FontSize="10.5" />
+                            <TextBlock Text="{Binding TodayFilePath}" Style="{StaticResource SettingHint}"
+                                       FontSize="10.5" />
+                            <TextBlock Text="{Binding ManifestFilePath}" Style="{StaticResource SettingHint}"
                                        FontSize="10.5" />
 
                             <StackPanel Orientation="Horizontal" Margin="0,9,0,0">
@@ -173,7 +177,7 @@
                             <Rectangle Height="0.5" Fill="#EFEDE8" Margin="0,12,0,10" />
 
                             <TextBlock Text="备份" Style="{StaticResource SettingLabel}" />
-                            <TextBlock Text="每次保存留一份备份，最多保留 7 份；记录损坏时自动回滚到最近一份"
+                            <TextBlock Text="只有内容变化的当天文件才会重写并备份，每个日期最多留 7 份；单日损坏只回滚当天，不影响其他日期"
                                        Style="{StaticResource SettingHint}" />
                             <TextBlock Text="{Binding BackupDirPath}" Style="{StaticResource SettingHint}"
                                        FontSize="10.5" />

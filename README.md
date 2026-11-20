@@ -17,9 +17,10 @@
 | 顺延标记 | 橙色「顺延 N 天」，满 3 天变红；历史日显示「未完成 · 已顺延至今天」 |
 | 历史只读 | 选中今天之前的日期时，不能新增、勾选、删除 |
 | 删除 | 硬删除，点「删除」立即移除，不进回收站、不可恢复 |
+| 撤回 | 任务行「撤回」把这条计划拿回下方编辑框，改完再重新发；编辑框同时只留最后一条撤回 |
 | 改期移动 | 任务行「改期」可移到今天或未来任意一天；未来任务行多一个「拉回今天」，一键移回 |
 | 设置面板 | 标题栏齿轮或托盘「设置…」打开；开机自启、托盘行为、MCP 端口与令牌、数据目录、关于全部收在这里 |
-| 记录位置 | 设置 →「打开记录所在位置」，在资源管理器里选中 `tasks.json`（同目录还有 `backups` 备份） |
+| 记录位置 | 设置 →「打开记录所在位置」，在资源管理器里选中当天的 `days\yyyy-MM-dd.json`（同目录还有 `manifest.json` 与 `backups`） |
 | 标签 / 优先级 | 标签逗号分隔最多 4 个；高 / 中 / 低三级，列表按未完成优先、再按优先级排序 |
 | 托盘常驻 | 关闭窗口只隐藏到托盘，双击托盘图标恢复；托盘菜单只剩「显示主窗口 / 设置… / 退出」 |
 | 开机自启 | 设置里开关，写 `HKCU\...\Run`，带 `--minimized` 参数，启动后直接进托盘 |
@@ -38,8 +39,10 @@ D:\workbuddy\todo\
 │  ├─ Assets\app.ico          exe / 安装包图标（16/32/48/256 四档）
 │  ├─ Assets\tray.png         托盘图标（内嵌资源）
 │  ├─ Themes\Styles.xaml      浅色画刷与控件样式（含设置面板用开关）
-│  ├─ Models\Entities.cs      TaskItem / AppData
-│  ├─ Services\Services.cs    JSON 存储、顺延引擎、改期、开机自启、数据位置
+│  ├─ Models\Entities.cs      TaskItem / AppData / DayFile / 索引模型
+│  ├─ Services\Services.cs    顺延引擎、改期、开机自启、数据位置
+│  ├─ Services\DataStore.cs   按天分片存储、脏写、manifest、迁移与恢复
+│  ├─ Services\CloudStore.cs  云端文件桶抽象（ICloudStore / 空实现 / 本地目录参考实现）
 │  ├─ Services\AppSettings.cs 应用偏好（关闭窗口是否最小化到托盘）
 │  ├─ ViewModels\ViewModel.cs MVVM 视图模型与命令
 │  ├─ ViewModels\SettingsViewModel.cs 设置面板视图模型
@@ -50,24 +53,45 @@ D:\workbuddy\todo\
 │  └─ installer.iss          Inno Setup 6 脚本（当前用户安装）
 ├─ dist\
 │  ├─ portable\DayTodo.exe   单文件便携版
-│  └─ installer\DayTodo-Setup-1.0.3.exe
+│  └─ installer\DayTodo-Setup-1.0.4.exe
 └─ README.md
 ```
 
 ## 数据
 
-- 主数据：`%APPDATA%\DayTodo\tasks.json`（UTF-8，中文不转义，可直接用记事本看）
-- 备份：同目录 `backups\tasks-yyyyMMdd-HHmm.json`，自动保留最近 7 份
-- 应用偏好：`%APPDATA%\DayTodo\app-settings.json`（关闭窗口是否最小化到托盘）
-- MCP 开关：`%APPDATA%\DayTodo\mcp-settings.json`（启用状态、端口、访问令牌）
-- 写入方式：先写 `.tmp` 再原子替换，断电不会写坏主文件
-- 文件损坏时：自动改名为 `tasks.corrupt-*.json`，并从最新备份恢复
+自 1.0.4 起改为**一天一个文件**，不再是全库存一个 `tasks.json`：
+
+```
+%APPDATA%\DayTodo\
+├─ days\
+│  ├─ 2026-11-11.json     当天排期的全部任务（按 DateCurrent 归属，一条任务只存一份）
+│  ├─ 2026-11-12.json
+│  └─ 2026-11-13.json     今天
+├─ manifest.json          索引：每个日期的文件名、任务数、SHA-256
+├─ backups\
+│  ├─ 2026-11-13\
+│  │  └─ 2026-11-13-071530.json   该日改动前的副本，每个日期最多 7 份
+│  └─ corrupt\            损坏文件的隔离目录
+├─ app-settings.json      关闭窗口是否最小化到托盘
+├─ mcp-settings.json      MCP 启用状态、端口、访问令牌
+└─ tasks.json             旧版全库文件，迁移后原样保留作为回滚点
+```
+
+- 日文件格式：`{ "SchemaVersion": 2, "Date": "yyyy-MM-dd", "Tasks": [...] }`，UTF-8 无 BOM、中文不转义，可直接用记事本看；字段仍是 PascalCase（`Id` 是 GUID 字符串，`DateCompleted` 可为 null）
+- `manifest.json` 由 PC 端独占写，**不含时间戳**：内容不变就不会重写，将来别的设备只读它、再用 `Sha256` 算出需要增量下载哪几天
+- **只写脏文件**：保存时按 `DateCurrent` 分组，内容没变的日期文件一个字节都不动。这是特意为了网盘同步设计的 —— 历史文件保持静态，不会每次点一下就产生一堆新版本或冲突副本
+- 顺延 / 改期不需要跨文件事务：改写 `DateCurrent` 后，Save 会把它写进新日期、把旧日期文件清空（**保留空文件而不是删除**，同步盘对删除更敏感，历史日也需要知道这天存在过）
+- 写入仍是先写 `.tmp` 再原子替换；某一天文件损坏时只隔离这一天（`backups\corrupt\`）并从该日最近备份恢复，**不影响其他日期**
+- 一次性迁移：首次启动若发现旧 `tasks.json` 且没有 `manifest.json`，按 `DateCurrent` 拆成日文件并生成索引；旧文件不删，可随时回滚
+- `DAYTODO_DATA_DIR` 环境变量仍可重定向整个数据目录（隔离测试用）。设置后该实例会使用独立的单实例互斥与激活事件，**不会**被日常托盘实例挡住、也不会把它的窗口抢到前台；不设置时行为与以前完全一致
 - **卸载程序不会删除任务数据**；需要彻底清除请手动删 `%APPDATA%\DayTodo`
-- 找记录：设置 →「打开记录所在位置」或「打开备份目录」，会在资源管理器里定位 `tasks.json`；想导出/备份直接复制这个文件即可
+- 找记录：设置 →「打开记录所在位置」会选中今天的文件；「打开备份目录」打开 `backups`。想导出/备份直接复制整个数据目录即可，网盘同步也指向这个目录
+
+> 当前定位是「**PC 写、云端存、别处读**」。程序只在启动时读取磁盘、运行中内存常驻，不会感知网盘从别处同步过来的改动；因此适合单向备份或「一端退出后另一端打开」，不建议两台电脑同时开着实时双写。
 
 ### 任务字段与顺延规则
 
-一条任务永远只有一条记录，不按天复制：
+一条任务永远只有一条记录，不按天复制。物理上按 `DateCurrent` 落到对应日期的文件里；启动时 `Load` 会把**所有**日文件合并回同一份内存数据，所以下面这套历史可见规则完全没变（不能只加载当天文件，否则历史日看不到顺延过的任务）：
 
 | 字段 | 含义 |
 |---|---|
@@ -86,6 +110,35 @@ D:\workbuddy\todo\
 移动 = 重新排期，不是复制：`DateOrigin` 和 `DateCurrent` 一起改成目标日，`PostponeDays` 清零，任务从原来的日期消失（历史日也不再显示它）。目标日到了还没完成，就照常按上面的顺延规则累计天数。已完成的任务、历史日（只读）不能移动。
 
 移到未来后，今天的列表里就看不到这条任务了；左侧「今日概览」会出现「未来安排 N 项 · 查看」，点它跳到最近的未来日，在那里可以「拉回今天」（点完界面会跟着回到今天）。
+
+### 撤回：把计划拿回编辑框再改
+
+任务行的「撤回」相当于「发错了，重新改一下」：点一下，这条计划**从清单里移除**，标题、标签、优先级一起回到底部编辑框，光标自动落到输入框末尾，编辑框上方出现一条「撤回」提示，写清撤回的是哪一条。改完按回车或点「添加」就重新发出去 —— 新任务排到当前选中的那一天，未完成状态重置。
+
+编辑框同时**只放一条撤回内容**：连续撤回多条时，前一条的内容被后一条覆盖，最后只留下最后撤回的那条（之前撤回的计划已按你的操作从清单里移除，不会攒成一堆草稿）。自己把输入框清空，撤回提示也随之消失。
+
+和「删除」的区别：「删除」是硬删除、什么都不留；「撤回」是「改完重发」的入口，两者都在可编辑的日期生效，历史日（只读）不显示这两个按钮。
+
+## CloudStore 接口（预留，默认关闭）
+
+`Services\CloudStore.cs` 只定义一层抽象：把云端看成「一个能被两端程序读写的**扁平文件桶**」，契约只有三个动作。
+
+| 成员 | 含义 |
+|---|---|
+| `ListAsync()` | 列出桶内对象，返回 `CloudFile(Name, Length, Sha256, LastModifiedUtc)`；SHA-256 与 `manifest.json` 一致，供增量比对 |
+| `GetAsync(name)` | 取回一个文件的原始字节；不存在返回 `null` |
+| `PutAsync(name, bytes)` | 整文件原子替换；**内容相同就一个字节都不写**并返回 `false`，避免同步盘产生多余版本 |
+| `Provider` / `IsEnabled` | 适配器标识，以及这个实例是否真的会做 I/O |
+
+文件里还有三个配套类型：`NullCloudStore`（默认，纯惰性；`Put` 直接抛异常而不是静默丢数据）、`LocalFolderCloudStore`（把本地目录当桶的参考实现，防目录穿越、过滤写入中的 `.tmp`）、`CloudStoreProvider.Current`（唯一的替换入口，读 `DAYTODO_CLOUD_DIR`）。
+
+**当前状态：接口只是接口。** `DataStore` 不调用它，程序不自动上传、不自动下载、不发任何网络请求，也不会读写数据目录之外的文件：
+
+- 不设环境变量时 `Provider=none`、`IsEnabled=False`；
+- 设 `DAYTODO_CLOUD_DIR` 指向某个本地目录（例如微云同步助手正在同步的文件夹），只是让 `LocalFolderCloudStore` 可用，**并不会触发同步**；
+- 接口刻意**不提供 Delete**（按天布局保留空文件而不用删除）、**不做锁 / ETag**（本设计里 PC 独占写，其他端只读），并统一用异步 + `CancellationToken`，方便以后接 HTTP 适配器。
+
+以后要接真实云产品，只需实现 `ICloudStore` 并替换 `CloudStoreProvider` 的创建逻辑（微云 MCP / 坚果云 WebDAV / 对象存储各写一个适配器），按天分片的文件布局、`manifest.json` 和将来的移动端读取代码都不用改。自检里的 `CloudStore*` 报告字段见「测试与排错」。
 
 ## 开发运行
 
@@ -157,7 +210,7 @@ powershell -ExecutionPolicy Bypass -File build\publish.ps1 -Installer
 
 ## 测试与排错
 
-自动启动自检（`--verify` 会**真实显示主窗口**，模拟输入一条任务并按回车，确认任务真的写入，随后自动回滚数据文件，不会改动你的清单）：
+自动启动自检（`--verify` 会**真实显示主窗口**，模拟输入一条任务并按回车，确认任务真的写入，随后自动回滚整个数据目录，不会改动你的清单）：
 
 ```powershell
 Remove-Item "$env:TEMP\DayTodo-verify.ok" -Force -ErrorAction SilentlyContinue
@@ -165,7 +218,7 @@ Start-Process "dist\portable\DayTodo.exe" -ArgumentList "--verify" -Wait
 Get-Content "$env:TEMP\DayTodo-verify.ok"
 ```
 
-报告里应出现 `CanAdd=True`、`AddButtonEnabled=True`、`EnterHandled=True`，且 `TasksAfterEnter` 比运行前多 1；若启动期抛异常（弹「启动失败」），标记文件不会生成。
+报告里应出现 `CanAdd=True`、`AddButtonEnabled=True`、`EnterHandled=True`，且 `TasksAfterEnter` 比运行前多 1（`TasksAfterEnter` 统计的是今天那个日文件里的任务数）；若启动期抛异常（弹「启动失败」），标记文件不会生成。自检会在开始前给整个数据目录做快照，结束后完整还原 —— 日文件、manifest、按日备份和设置文件都不会被改动。
 
 自检还会**真实显示一次设置面板**并跑一遍设置动作，确认绑定与热更新都没坏：
 
@@ -175,8 +228,17 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 | `PortApplied` / `PortListenerMoved` / `OldPortClosed` | 改端口后监听器是否真的搬到新端口、旧端口是否释放 |
 | `TokenRejectsAnonymous` / `TokenAcceptsBearer` | 加令牌后无令牌 401、带令牌 200 |
 | `PortRestored` / `TokenRestored` | 自检结束后端口与令牌是否恢复原值 |
+| `SnapshotFiles` / `DayFiles` / `ManifestExists` | 快照文件数、按天文件数、索引是否存在 |
+| `SettingsDaysDir` | 设置面板数据分区绑定的 days 目录 |
+| `CloudStoreProvider` / `CloudStoreEnabled` | 云端适配器的默认值（应为 `none` / `False`，即完全惰性） |
+| `CloudStorePut` / `CloudStoreDirtyWriteSkipped` / `CloudStoreList` / `CloudStoreRoundTrip` / `CloudStoreMissingIsNull` / `CloudStoreRejectsTraversal` / `CloudStoreNullRejectsPut` | 在临时目录里跑一遍 `ICloudStore` 契约：写入、相同内容跳过、列目录 + SHA-256、读回一致、不存在返回 null、拒绝目录穿越、惰性实现的 `Put` 明确报错 |
+| `RecallButtonRendered` / `RecallButtonVisible` / `RecallButtonCommand` | 任务行里「撤回」按钮是否真的渲染出来、可见、命令已绑定 |
+| `RecallComposerTitle` / `RecallDraftPending` / `RecallHintText` / `RecallHintVisible` | 撤回后内容是否回到编辑框、草稿状态与提示条是否正确 |
+| `RecallRemovedFromList` / `TasksAfterRecall` | 撤回后清单里没有这条、当天日文件也已写盘（计数减 1） |
+| `RecallKeepsLastOnly` / `RecallFirstGone` | 连续撤回两条时，编辑框只留最后一条，前一条已不在清单里 |
+| `RecallResent` / `RecallDraftCleared` / `RecallComposerCleared` | 改完重新发成功，草稿状态与输入框都已清空 |
 
-版本记录：1.0.1 修掉启动期绑定异常（`ProgressBar.Value` 默认双向绑定，绑定到只读计算属性 `Progress` 时 WPF 尝试回写并抛异常，已改为 `Mode=OneWay`）；1.0.2 重做添加栏（带边框的长输入框、框内提示文字、回车与按钮双通道），并把自检扩展为端到端交互测试；1.0.3 抽出设置面板，开机自启 / 记录位置 / MCP 端口令牌等操作全部收进设置，主界面左栏只留 MCP 服务一项。
+版本记录：1.0.1 修掉启动期绑定异常（`ProgressBar.Value` 默认双向绑定，绑定到只读计算属性 `Progress` 时 WPF 尝试回写并抛异常，已改为 `Mode=OneWay`）；1.0.2 重做添加栏（带边框的长输入框、框内提示文字、回车与按钮双通道），并把自检扩展为端到端交互测试；1.0.3 抽出设置面板，开机自启 / 记录位置 / MCP 端口令牌等操作全部收进设置，主界面左栏只留 MCP 服务一项；1.0.4 把全库单文件改成按天分片（`days\yyyy-MM-dd.json` + `manifest.json`），加入脏写、按日备份、单日损坏隔离与旧数据迁移，为网盘同步和将来的移动端读取预留文件布局；同时抽出 `CloudStore` 抽象接口（默认惰性、不含任何云端实现），并给每条任务加上「撤回」操作（拿回编辑框改完重发，编辑框只保留最后一条撤回）。
 
 测试清单：
 
@@ -186,14 +248,17 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 4. 回到历史日 → 显示「未完成 · 已顺延至今天」，添加栏与删除按钮消失，勾选无效
 5. 设置 → 开机自启 → 检查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 6. 重复双击 exe → 只激活已有窗口，不出现第二个进程
-7. 手动改坏 `tasks.json` → 启动后自动隔离并从备份恢复
+7. 手动改坏某一天的 `days\yyyy-MM-dd.json` → 启动后只隔离这一天并从该日备份恢复，其他日期任务不受影响
 8. 在中文用户名 / 带空格路径下安装运行
 9. 今天的任务点「改期」选下周某天 → 今天列表里消失 → 翻到那天能看到 → 点「拉回今天」→ 回到今天
-10. 设置 →「打开记录所在位置」→ 资源管理器选中 `tasks.json`；「打开备份目录」能看到 7 份滚动备份
+10. 设置 →「打开记录所在位置」→ 资源管理器选中今天的 `days\yyyy-MM-dd.json`；「打开备份目录」能看到按日期分目录的备份；数据分区显示 days 目录与 manifest 路径
 11. 设置 → 改 MCP 端口为 8766 → 立刻监听新端口、8765 释放；改回 8765 恢复
 12. 设置 → 填访问令牌 → 无令牌的客户端请求 401、带 `Bearer <令牌>` 才通
 13. 设置 → 关掉「关闭窗口时最小化到托盘」→ 点关闭按钮应用直接退出；打开则缩回托盘
 14. 主界面左栏只剩 MCP 服务一项，标题栏齿轮与托盘「设置…」都能打开设置面板
+15. 放一份旧版 `tasks.json` 进隔离数据目录后首次启动 → 自动按 `DateCurrent` 拆成日文件、生成 `manifest.json`，旧文件仍在
+16. 连续两次不改动数据的保存 → 所有日文件与 `manifest.json` 的修改时间都不变（脏写生效）
+17. 任务行点「撤回」→ 该条从清单消失、内容回到编辑框、提示条出现 → 改标题按回车 → 新的一条排回当天；连着撤回两条 → 编辑框只剩最后那条的内容
 
 常见坑：
 
@@ -219,7 +284,7 @@ MCP 服务**内嵌在 DayTodo 主程序里**：应用启动后自动在 `http://
 |---|---|
 | 通用 | 开机自启（写 `HKCU\...\Run`）、关闭窗口时最小化到托盘 |
 | MCP 服务 | 启用开关、端口、访问令牌、连接地址（一键复制） |
-| 数据 | 打开记录所在位置、打开备份目录、数据路径 |
+| 数据 | days 目录 / 当天文件 / manifest 路径、打开记录所在位置、打开备份目录 |
 | 关于 | 版本号、退出 DayTodo |
 
 端口与令牌**改完即生效**：设置窗口会立刻重启监听器（无令牌时放行，带令牌时校验 `Authorization: Bearer <令牌>`），状态保存在 `%APPDATA%\DayTodo\mcp-settings.json`，下次启动沿用（默认开启）。
@@ -289,4 +354,4 @@ curl -X POST http://127.0.0.1:8765/mcp \
 - `src\DayTodo\Mcp\McpTaskService.cs`：工具的数据操作，切到 UI 线程后走 `DataStore.Save` + `Rebuild`
 - `src\DayTodo\Mcp\McpSettings.cs`：开关状态持久化
 
-数据仍是 `tasks.json`（UTF-8 无 BOM、中文不转义、原子写 + 7 份备份）。因为只有一个进程写，不再需要跨进程锁、乐观重试或 FileSystemWatcher。
+数据仍是同一份内存 `AppData`，落盘时按天分片（见「数据」章节）。因为只有一个进程写，不再需要跨进程锁、乐观重试或 FileSystemWatcher —— 这也意味着程序**不会**感知网盘从别处同步过来的文件改动。当前定位是「PC 写、云端存、别处读」：适合单向备份或一端退出后另一端打开，不适合两台电脑同时开着实时双写。

@@ -7,8 +7,8 @@ using DayTodo.Services;
 namespace DayTodo.Mcp;
 
 /// <summary>
-/// Persists the MCP on/off switch next to tasks.json (a separate file so the task
-/// data itself stays clean). Kept deliberately tiny: no registry, no settings UI.
+/// Persists the MCP on/off switch next to the per-day task files (a separate file
+/// so the task data itself stays clean). Kept deliberately tiny: no registry, no settings UI.
 /// </summary>
 public sealed class McpSettings
 {
