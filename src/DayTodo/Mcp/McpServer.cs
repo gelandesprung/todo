@@ -113,7 +113,7 @@ public sealed class McpServer
             ["serverInfo"] = new JsonObject
             {
                 ["name"] = "daytodo",
-                ["version"] = "1.0.6",
+                ["version"] = "1.0.7",
                 ["description"] = "DayTodo 日清单：让 AI 客户端管理每日任务与随记"
             },
             ["instructions"] =
