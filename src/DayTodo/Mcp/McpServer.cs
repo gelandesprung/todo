@@ -30,8 +30,13 @@ public sealed class McpServer
     };
 
     private readonly McpTaskService _tasks;
+    private readonly McpNoteService _notes;
 
-    public McpServer(McpTaskService tasks) => _tasks = tasks;
+    public McpServer(McpTaskService tasks, McpNoteService notes)
+    {
+        _tasks = tasks;
+        _notes = notes;
+    }
 
     /// <summary>Returns a JSON-RPC response, or null for a notification / empty batch.</summary>
     public string? Handle(string message)
@@ -108,13 +113,15 @@ public sealed class McpServer
             ["serverInfo"] = new JsonObject
             {
                 ["name"] = "daytodo",
-                ["version"] = "1.0.0",
-                ["description"] = "DayTodo 日清单：让 AI 客户端创建、查询、完成和删除每日任务"
+                ["version"] = "1.0.6",
+                ["description"] = "DayTodo 日清单：让 AI 客户端管理每日任务与随记"
             },
             ["instructions"] =
-                "用 create_task 创建任务（默认今天，可指定今天或未来的 yyyy-MM-dd）；" +
-                "用 list_tasks 查看某天的任务并获取 id；" +
-                "complete_task / delete_task 建议传 id。历史日期只读，delete_task 是硬删除且不可恢复。"
+                "任务：create_task 创建（默认今天，只能是今天或未来）；list_tasks 查看并按 id 定位；" +
+                "complete_task / delete_task 建议传 id，delete_task 是硬删除且不可恢复。" +
+                "随记：create_note 只写今天；list_notes 按日期查看；search_notes 全文搜索（可限定日期范围）；" +
+                "update_note / delete_note 只能操作今天的随记。" +
+                "历史日期与历史随记一律只读；随记引用通过 note_id 关联，可用 list_notes / search_notes 获取。"
         };
     }
 
@@ -194,6 +201,78 @@ public sealed class McpServer
             new JsonObject { ["required"] = new JsonArray("id") },
             new JsonObject { ["required"] = new JsonArray("title") });
 
+        JsonObject Note(string description) => new()
+        {
+            ["type"] = "string",
+            ["description"] = description
+        };
+
+        var noteIdProperty = Note("随记 GUID，可用 list_notes 或 search_notes 获取");
+        var noteTextProperty = Note("随记正文，必填，最多 5000 字");
+        var noteRefsProperty = new JsonObject
+        {
+            ["type"] = "array",
+            ["description"] = "要引用的随记：id 字符串，或 {id, date?, text?} 对象；目标必须已存在",
+            ["items"] = new JsonObject
+            {
+                ["oneOf"] = new JsonArray(
+                    Note("已存在随记的 GUID"),
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["id"] = (JsonObject)noteIdProperty.DeepClone(),
+                            ["date"] = Note("可选，用于核对目标日期 yyyy-MM-dd"),
+                            ["text"] = Note("可选，自定义引用文字；省略则回读目标原文")
+                        },
+                        ["required"] = new JsonArray("id")
+                    })
+            }
+        };
+        var noteLimitProperty = new JsonObject
+        {
+            ["type"] = "integer",
+            ["description"] = "最多返回条数，默认 100，上限 500",
+            ["default"] = 100
+        };
+
+        var createNoteSchema = Schema(
+            ("text", (JsonObject)noteTextProperty.DeepClone()),
+            ("references", (JsonObject)noteRefsProperty.DeepClone()));
+        createNoteSchema["required"] = new JsonArray("text");
+
+        var listNotesSchema = Schema(
+            ("date", Note("yyyy-MM-dd，默认今天；all=true 时忽略")),
+            ("all", new JsonObject
+            {
+                ["type"] = "boolean",
+                ["description"] = "为 true 时返回全部日期的随记，默认 false"
+            }),
+            ("limit", (JsonObject)noteLimitProperty.DeepClone()));
+
+        var searchNotesSchema = Schema(
+            ("query", Note("搜索关键词，大小写不敏感；同时匹配正文与引用文字")),
+            ("from", Note("可选，起始日期 yyyy-MM-dd（含）")),
+            ("to", Note("可选，结束日期 yyyy-MM-dd（含）")),
+            ("limit", (JsonObject)noteLimitProperty.DeepClone()));
+        searchNotesSchema["required"] = new JsonArray("query");
+
+        var updateNoteSchema = Schema(
+            ("id", (JsonObject)noteIdProperty.DeepClone()),
+            ("text", Note("新的正文；不传则保留原文")),
+            ("references", (JsonObject)noteRefsProperty.DeepClone()),
+            ("clear_references", new JsonObject
+            {
+                ["type"] = "boolean",
+                ["description"] = "为 true 时清空全部引用，默认 false"
+            }));
+        updateNoteSchema["required"] = new JsonArray("id");
+
+        var deleteNoteSchema = Schema(
+            ("id", (JsonObject)noteIdProperty.DeepClone()));
+        deleteNoteSchema["required"] = new JsonArray("id");
+
         return new JsonArray
         {
             new JsonObject
@@ -229,6 +308,36 @@ public sealed class McpServer
                     ["type"] = "object",
                     ["properties"] = new JsonObject()
                 }
+            },
+            new JsonObject
+            {
+                ["name"] = "create_note",
+                ["description"] = "在今天的随记里记一条想法。随记只能写今天，不能指定过去或未来日期。可引用已存在的随记。",
+                ["inputSchema"] = createNoteSchema
+            },
+            new JsonObject
+            {
+                ["name"] = "list_notes",
+                ["description"] = "查看某一天（默认今天）的随记，返回 id、日期、时间、正文和引用。all=true 可查全部历史。",
+                ["inputSchema"] = listNotesSchema
+            },
+            new JsonObject
+            {
+                ["name"] = "search_notes",
+                ["description"] = "在所有随记里搜索关键词（大小写不敏感），可限定日期范围；结果按日期倒序。",
+                ["inputSchema"] = searchNotesSchema
+            },
+            new JsonObject
+            {
+                ["name"] = "update_note",
+                ["description"] = "修改今天的随记正文和/或引用。历史随记只读；至少提供 text、references 或 clear_references 之一。",
+                ["inputSchema"] = updateNoteSchema
+            },
+            new JsonObject
+            {
+                ["name"] = "delete_note",
+                ["description"] = "永久删除今天的随记（不可恢复）。历史随记只读，不能通过本工具删除。",
+                ["inputSchema"] = deleteNoteSchema
             }
         };
     }
@@ -276,6 +385,41 @@ public sealed class McpServer
                 }
                 case "get_overview":
                     return ToolResult("今日概览：", _tasks.GetOverview(), false);
+                case "create_note":
+                {
+                    var item = _notes.CreateNote(Str(args, "text"), ParseRefs(args));
+                    return ToolResult($"已记录随记（{item.Date} {item.CreatedAt}）。",
+                        _notes.Describe(item), false);
+                }
+                case "list_notes":
+                {
+                    var date = Str(args, "date");
+                    var all = Bool(args, "all", false);
+                    var notes = _notes.ListNotes(date, all, Int(args, "limit", 100));
+                    var scope = all ? "（全部日期）" : string.IsNullOrWhiteSpace(date) ? "（今天）" : $"（{date}）";
+                    return ToolResult($"共 {notes.Count} 条随记{scope}。", _notes.Describe(notes), false);
+                }
+                case "search_notes":
+                {
+                    var query = Str(args, "query");
+                    var notes = _notes.SearchNotes(query, Str(args, "from"), Str(args, "to"),
+                        Int(args, "limit", 100));
+                    return ToolResult($"「{query}」匹配 {notes.Count} 条随记。",
+                        _notes.Describe(notes), false);
+                }
+                case "update_note":
+                {
+                    var item = _notes.UpdateNote(Str(args, "id"), Str(args, "text"),
+                        ParseRefs(args), Bool(args, "clear_references", false));
+                    return ToolResult($"已更新 {item.Date} {item.CreatedAt} 的随记。",
+                        _notes.Describe(item), false);
+                }
+                case "delete_note":
+                {
+                    var item = _notes.DeleteNote(Str(args, "id"));
+                    return ToolResult($"已永久删除 {item.Date} {item.CreatedAt} 的随记，不可恢复。",
+                        _notes.Describe(item), false);
+                }
                 default:
                     return ToolResult($"未知工具：{name}", null, true);
             }
@@ -352,6 +496,33 @@ public sealed class McpServer
         var s = node.ToJsonString().Trim('"');
         if (bool.TryParse(s, out var parsed)) return parsed;
         return s switch { "1" => true, "0" => false, _ => fallback };
+    }
+
+    private static int Int(JsonObject args, string name, int fallback)
+    {
+        if (!args.TryGetPropertyValue(name, out var node) || node == null) return fallback;
+        if (node is JsonValue v && v.TryGetValue<int>(out var i)) return i;
+        return int.TryParse(node.ToJsonString().Trim('"'), out var parsed) ? parsed : fallback;
+    }
+
+    /// <summary>Missing means "leave references alone"; [] means "clear" on update.</summary>
+    private static List<NoteRefInput>? ParseRefs(JsonObject args)
+    {
+        if (!args.TryGetPropertyValue("references", out var node) || node == null) return null;
+        if (node is not JsonArray arr)
+            throw new ArgumentException("references 必须是随记 id 数组");
+
+        var result = new List<NoteRefInput>();
+        foreach (var item in arr)
+        {
+            if (item is JsonValue v && v.TryGetValue<string>(out var id))
+                result.Add(new NoteRefInput(id));
+            else if (item is JsonObject o)
+                result.Add(new NoteRefInput(Str(o, "id") ?? string.Empty,
+                    Str(o, "date"), Str(o, "text")));
+            else throw new ArgumentException("references 元素必须是 id 字符串或 {id,...} 对象");
+        }
+        return result;
     }
 
     private static string? Str(JsonObject? obj, string name)

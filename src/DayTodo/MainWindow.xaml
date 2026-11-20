@@ -101,6 +101,81 @@
                 </Grid>
             </Border>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:NoteRowViewModel}">
+            <Border Background="#FFFFFF" BorderBrush="{StaticResource LineBrush}" BorderThickness="0.5"
+                    CornerRadius="8" Padding="12,10" SnapsToDevicePixels="True">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding Time}" FontSize="11"
+                               Foreground="{StaticResource TextMuted}" />
+
+                    <!-- Long notes stay at roughly three lines until opened. -->
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding Text}" FontSize="12.5"
+                               Foreground="{StaticResource TextPrimary}" TextWrapping="Wrap"
+                               TextTrimming="CharacterEllipsis" Height="57" VerticalAlignment="Top"
+                               Margin="0,6,0,0" LineHeight="19"
+                               Visibility="{Binding IsCollapsed, Converter={StaticResource BoolVis}}" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding Text}" FontSize="12.5"
+                               Foreground="{StaticResource TextPrimary}" TextWrapping="Wrap"
+                               Margin="0,6,0,0" LineHeight="19"
+                               Visibility="{Binding IsExpanded, Converter={StaticResource BoolVis}}" />
+
+                    <ItemsControl Grid.Row="2" Grid.Column="0" ItemsSource="{Binding Quotes}"
+                                  Margin="0,9,0,0"
+                                  Visibility="{Binding HasQuotes, Converter={StaticResource BoolVis}}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{StaticResource AccentLight}" CornerRadius="4"
+                                        Padding="7,3" Margin="0,0,6,4">
+                                    <Button Style="{StaticResource QuoteChipButton}"
+                                            Command="{Binding OpenCommand}"
+                                            ToolTip="跳到被引用的那一天">
+                                        <TextBlock FontSize="10.5" Foreground="{StaticResource AccentDark}">
+                                            <TextBlock.Text>
+                                                <MultiBinding StringFormat="{}引用 {0} · {1}">
+                                                    <Binding Path="DateText" />
+                                                    <Binding Path="Text" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                    </Button>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <StackPanel Grid.Row="0" Grid.Column="1" Grid.RowSpan="3" Orientation="Horizontal"
+                                VerticalAlignment="Top" Margin="10,0,0,0">
+                        <Button Content="{Binding FoldText}" Style="{StaticResource LinkButton}"
+                                Command="{Binding ToggleFoldCommand}" Margin="0,0,8,0"
+                                ToolTip="长随记折叠为三行，点击展开或收起"
+                                Visibility="{Binding CanFold, Converter={StaticResource BoolVis}}" />
+                        <Button Content="引用" Style="{StaticResource RowActionButton}"
+                                Command="{Binding QuoteCommand}" ToolTip="跳回今天，把这条随记放进引用" />
+                        <Button Content="编辑" Style="{StaticResource RowActionButton}" Margin="6,0,0,0"
+                                Command="{Binding EditCommand}"
+                                Visibility="{Binding CanEdit, Converter={StaticResource BoolVis}}" />
+                        <Button Content="删除" Style="{StaticResource DeleteButton}" Margin="8,0,0,0"
+                                Command="{Binding DeleteCommand}"
+                                Visibility="{Binding CanEdit, Converter={StaticResource BoolVis}}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
     </Window.Resources>
 
     <Border BorderBrush="#DDDBD4" BorderThickness="0.5" CornerRadius="8" ClipToBounds="True">
@@ -267,11 +342,35 @@
                 <Grid Grid.Column="1" Background="#FFFFFF">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Row="0" Margin="20,16,20,0">
+                    <Grid Grid.Row="0" Margin="20,10,20,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <Button Content="任务" Style="{StaticResource TabButton}"
+                                    Command="{Binding ShowTasksCommand}" HorizontalAlignment="Center" />
+                            <Grid Height="2" Margin="8,1,8,0">
+                                <Border Background="{StaticResource Accent}" CornerRadius="1"
+                                        Visibility="{Binding IsTasksTab, Converter={StaticResource BoolVis}}" />
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="24,0,0,0">
+                            <Button Content="随记" Style="{StaticResource TabButton}"
+                                    Command="{Binding ShowNotesCommand}" HorizontalAlignment="Center" />
+                            <Grid Height="2" Margin="8,1,8,0">
+                                <Border Background="{StaticResource Accent}" CornerRadius="1"
+                                        Visibility="{Binding IsNotesTab, Converter={StaticResource BoolVis}}" />
+                            </Grid>
+                        </StackPanel>
+                    </Grid>
+
+                    <StackPanel Grid.Row="1" Margin="20,8,20,0">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -311,33 +410,51 @@
                             </StackPanel>
                         </Grid>
 
-                        <TextBlock Text="{Binding SummaryText}" FontSize="11.5"
+                        <TextBlock Text="{Binding HeaderSummaryText}" FontSize="11.5"
                                    Foreground="{StaticResource TextMuted}" Margin="0,4,0,0" />
 
                         <!-- Progress is a computed read-only property. ProgressBar.Value binds
                              TwoWay by default, so an explicit OneWay mode is required. -->
                         <ProgressBar Height="3" Margin="0,13,0,0" Value="{Binding Progress, Mode=OneWay}" Maximum="100"
                                      Foreground="{StaticResource Accent}" Background="{StaticResource LineBrush}"
-                                     BorderThickness="0" />
+                                     BorderThickness="0"
+                                     Visibility="{Binding ShowTaskProgress, Converter={StaticResource BoolVis}}" />
                     </StackPanel>
 
-                    <Grid Grid.Row="1" Margin="20,12,20,8">
-                        <ListBox x:Name="TaskList" ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource TaskListItem}"
-                                 Background="Transparent" BorderThickness="0"
-                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                                    Visibility="{Binding HasNoTasks, Converter={StaticResource BoolVis}}">
-                            <TextBlock Text="这一天还没有任务" FontSize="13" Foreground="{StaticResource TextMuted}"
-                                       HorizontalAlignment="Center" />
-                            <TextBlock Text="在下方输入框添加" FontSize="11.5" Foreground="{StaticResource TextMuted}"
-                                       HorizontalAlignment="Center" Margin="0,5,0,0" />
-                        </StackPanel>
+                    <Grid Grid.Row="2" Margin="20,12,20,8">
+                        <Grid Visibility="{Binding IsTasksTab, Converter={StaticResource BoolVis}}">
+                            <ListBox x:Name="TaskList" ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource TaskListItem}"
+                                     Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        Visibility="{Binding HasNoTasks, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="这一天还没有任务" FontSize="13" Foreground="{StaticResource TextMuted}"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="在下方输入框添加" FontSize="11.5" Foreground="{StaticResource TextMuted}"
+                                           HorizontalAlignment="Center" Margin="0,5,0,0" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Visibility="{Binding IsNotesTab, Converter={StaticResource BoolVis}}">
+                            <ListBox x:Name="NoteList" ItemsSource="{Binding Notes}" ItemContainerStyle="{StaticResource NoteListItem}"
+                                     Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        Visibility="{Binding HasNoNotes, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="这一天还没有随记" FontSize="13" Foreground="{StaticResource TextMuted}"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="把此刻的想法随手记下来" FontSize="11.5" Foreground="{StaticResource TextMuted}"
+                                           HorizontalAlignment="Center" Margin="0,5,0,0" />
+                            </StackPanel>
+                        </Grid>
                     </Grid>
 
-                    <Grid Grid.Row="2" Background="#FCFCFB" MinHeight="96">
+                    <Grid Grid.Row="3" Background="#FCFCFB" MinHeight="96">
                         <Border Height="0.5" VerticalAlignment="Top" Background="#E8E6E0" />
 
+                        <Grid Visibility="{Binding IsTasksTab, Converter={StaticResource BoolVis}}">
                         <Grid Margin="20,10" Visibility="{Binding CanEdit, Converter={StaticResource BoolVis}}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -412,11 +529,80 @@
                                            VerticalAlignment="Center" Margin="14,0,0,0" />
                             </StackPanel>
                         </Grid>
+                        </Grid>
 
                         <TextBlock VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="11.5"
                                    Foreground="{StaticResource TextMuted}"
                                    Text="这一天是历史记录，只能查看，不能新增、勾选或删除"
                                    Visibility="{Binding IsHistory, Converter={StaticResource BoolVis}}" />
+
+                        <!-- 随记编辑区：只有真正的今天才会渲染输入框。 -->
+                        <Grid Visibility="{Binding IsNotesTab, Converter={StaticResource BoolVis}}">
+                            <Grid Margin="20,10" Visibility="{Binding CanWriteNote, Converter={StaticResource BoolVis}}">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel x:Name="NoteEditHint" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                                            Orientation="Horizontal" Margin="0,0,0,7"
+                                            Visibility="{Binding IsEditingNote, Converter={StaticResource BoolVis}}">
+                                    <Border Background="{StaticResource AccentLight}" CornerRadius="4"
+                                            Padding="7,2" VerticalAlignment="Center">
+                                        <TextBlock Text="编辑" FontSize="10.5" Foreground="{StaticResource AccentDark}" />
+                                    </Border>
+                                    <TextBlock Text="{Binding NoteEditorHintText}" FontSize="11" Margin="7,0,0,0"
+                                               Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" />
+                                    <Button Content="取消编辑" Style="{StaticResource LinkButton}" Margin="10,0,0,0"
+                                            Command="{Binding CancelNoteEditCommand}" />
+                                </StackPanel>
+
+                                <Border Grid.Row="1" Grid.Column="0" Height="66"
+                                        BorderBrush="#DCDAD2" BorderThickness="1" CornerRadius="6"
+                                        Background="#FFFFFF" Cursor="IBeam"
+                                        MouseLeftButtonDown="NoteInputArea_MouseDown">
+                                    <Grid>
+                                        <TextBox x:Name="NoteBox" Style="{StaticResource PlainTextBox}"
+                                                 Padding="12,9" VerticalAlignment="Stretch"
+                                                 VerticalContentAlignment="Top" TextWrapping="Wrap"
+                                                 AcceptsReturn="True" FontSize="12.5"
+                                                 Text="{Binding NewNoteText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 PreviewKeyDown="NoteBox_KeyDown"
+                                                 ToolTip="随手记下想法，回车保存，Shift+Enter 换行" />
+                                        <TextBlock Text="随手记下现在的想法…" FontSize="12.5" Margin="13,10,0,0"
+                                                   Foreground="{StaticResource TextMuted}" IsHitTestVisible="False"
+                                                   HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                   Visibility="{Binding NoteHintVisible, Converter={StaticResource BoolVis}}" />
+                                    </Grid>
+                                </Border>
+
+                                <Button x:Name="SaveNoteButton" Grid.Row="1" Grid.Column="1" Margin="10,0,0,0"
+                                        Width="78" Height="66" Content="保存" Style="{StaticResource PrimaryButton}"
+                                        IsEnabled="{Binding CanSaveNote}" Command="{Binding SaveNoteCommand}" />
+
+                                <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                                            Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Enter 保存 · Shift+Enter 换行" FontSize="10.5"
+                                               Foreground="{StaticResource TextMuted}" />
+                                    <TextBlock Text="{Binding PendingQuoteText}" FontSize="10.5" Margin="16,0,0,0"
+                                               Foreground="{StaticResource AccentDark}"
+                                               Visibility="{Binding HasPendingQuotes, Converter={StaticResource BoolVis}}" />
+                                    <Button Content="清除引用" Style="{StaticResource LinkButton}" Margin="8,0,0,0"
+                                            Command="{Binding ClearQuotesCommand}"
+                                            Visibility="{Binding HasPendingQuotes, Converter={StaticResource BoolVis}}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBlock VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="11.5"
+                                       Foreground="{StaticResource TextMuted}"
+                                       Text="{Binding NoteReadOnlyText}"
+                                       Visibility="{Binding NoteReadOnlyVisible, Converter={StaticResource BoolVis}}" />
+                        </Grid>
                     </Grid>
                 </Grid>
             </Grid>

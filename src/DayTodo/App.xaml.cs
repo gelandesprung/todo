@@ -105,12 +105,15 @@ public partial class App : Application, ISettingsHost
             _mcpSettings = McpSettings.Load();
 
             _window = new MainWindow();
-            _vm = new MainViewModel(data, ShowBalloon, _window.PickMoveDate, _window.FocusTitleBox);
+            _vm = new MainViewModel(data, ShowBalloon, _window.PickMoveDate,
+                _window.FocusTitleBox, _window.FocusNoteBox);
             _window.DataContext = _vm;
             MainWindow = _window;
 
-            _mcpServer = new McpServer(new McpTaskService(data, Dispatcher,
-                () => _vm!.CommitExternalChange()));
+            var commitExternal = () => _vm!.CommitExternalChange();
+            _mcpServer = new McpServer(
+                new McpTaskService(data, Dispatcher, commitExternal),
+                new McpNoteService(data, Dispatcher, commitExternal));
 
             InitTray();
             StartActivationListener();
@@ -224,6 +227,121 @@ public partial class App : Application, ISettingsHost
                     log.AppendLine("RecallResent=" + _vm.Rows.Any(r => r.Title == "自检任务二改"));
                     log.AppendLine("RecallDraftCleared=" + !_vm.HasRecalledDraft);
                     log.AppendLine("RecallComposerCleared=" + (_vm.NewTitle.Length == 0));
+
+                    // 随记: switch tabs, type into the real TextBox and save with Enter.
+                    _vm.ShowNotesCommand.Execute(null);
+                    _window.UpdateLayout();
+                    var noteBox = _window.FindName("NoteBox") as System.Windows.Controls.TextBox;
+                    var saveNoteButton = _window.FindName("SaveNoteButton") as System.Windows.Controls.Button;
+                    if (noteBox == null) throw new Exception("NoteBox missing");
+
+                    System.Func<System.Windows.Input.KeyEventArgs> noteEnter = () =>
+                    {
+                        var src = System.Windows.PresentationSource.FromVisual(noteBox);
+                        var args = new System.Windows.Input.KeyEventArgs(
+                            System.Windows.Input.Keyboard.PrimaryDevice, src,
+                            Environment.TickCount, System.Windows.Input.Key.Enter)
+                        { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
+                        noteBox.RaiseEvent(args);
+                        return args;
+                    };
+
+                    noteBox.Text = "自检随记";
+                    log.AppendLine("NoteTabVisible=" + _vm.IsNotesTab);
+                    log.AppendLine("NoteCanWrite=" + _vm.CanWriteNote);
+                    log.AppendLine("NoteVmText=" + _vm.NewNoteText);
+                    log.AppendLine("NoteCanSave=" + _vm.CanSaveNote);
+                    log.AppendLine("NoteSaveButtonEnabled=" + saveNoteButton?.IsEnabled);
+                    log.AppendLine("NotePlaceholderHidden=" + !_vm.NoteHintVisible);
+                    log.AppendLine("NoteEnterHandled=" + noteEnter().Handled);
+                    log.AppendLine("NoteVmTextAfter=" + _vm.NewNoteText);
+                    log.AppendLine("NoteCountAfterEnter=" + _vm.Notes.Count);
+                    log.AppendLine("NoteAdded=" + _vm.Notes.Any(n => n.Text == "自检随记"));
+
+                    noteBox.Text = "自检随记二";
+                    noteEnter();
+                    var firstNote = _vm.Notes.FirstOrDefault(n => n.Text == "自检随记");
+                    if (firstNote != null)
+                    {
+                        _vm.QuoteNoteForVerify(firstNote.Model);
+                        log.AppendLine("QuotePending=" + _vm.HasPendingQuotes);
+                        log.AppendLine("QuoteSummary=" + _vm.PendingQuoteText);
+                        noteBox.Text = "自检引用随记";
+                        noteEnter();
+                        var quoted = _vm.Notes.FirstOrDefault(n => n.Text == "自检引用随记");
+                        log.AppendLine("QuoteSaved=" + (quoted?.Model.References.Count == 1));
+                        log.AppendLine("QuoteClearedAfterSave=" + !_vm.HasPendingQuotes);
+                    }
+
+                    var editRow = _vm.Notes.FirstOrDefault(n => n.Text == "自检随记");
+                    if (editRow != null)
+                    {
+                        editRow.EditCommand.Execute(null);
+                        log.AppendLine("NoteEditing=" + _vm.IsEditingNote);
+                        log.AppendLine("NoteEditHint=" + _vm.NoteEditorHintText);
+                        noteBox.Text = "自检随记改";
+                        noteEnter();
+                        log.AppendLine("NoteEdited=" + _vm.Notes.Any(n => n.Text == "自检随记改"));
+                        log.AppendLine("NoteEditCountUnchanged=" + (_vm.Notes.Count == 3));
+                        log.AppendLine("NoteEditCleared=" + !_vm.IsEditingNote);
+                    }
+
+                    using (var noteDoc = System.Text.Json.JsonDocument.Parse(
+                               System.IO.File.ReadAllText(DataStore.TodayFilePath)))
+                    {
+                        log.AppendLine("NotesInDayFile=" +
+                            noteDoc.RootElement.GetProperty("Notes").GetArrayLength());
+                    }
+
+                    // A past day must expose no editor and no edit/delete commands.
+                    var yesterday = DateUtil.From(DateTime.Today.AddDays(-1));
+                    _vm.SeedNoteForVerify(yesterday, "历史随记");
+                    _vm.SeedNoteForVerify(yesterday, new string('长', 120));
+                    _vm.SelectedDate = DateTime.Today.AddDays(-1);
+                    _window.UpdateLayout();
+                    log.AppendLine("HistoryNoteReadOnly=" + !_vm.CanWriteNote);
+                    var historyRow = _vm.Notes.FirstOrDefault(n => n.Text == "历史随记");
+                    log.AppendLine("HistoryRowNotEditable=" + (historyRow?.CanEdit == false));
+                    var noteList = _window.FindName("NoteList") as System.Windows.Controls.ListBox;
+                    var historyItem = noteList?.ItemContainerGenerator.ContainerFromIndex(0)
+                        as System.Windows.Controls.ListBoxItem;
+                    if (historyItem != null)
+                    {
+                        log.AppendLine("HistoryEditButtonHidden=" +
+                            (FindVisual<System.Windows.Controls.Button>(historyItem,
+                                b => (b.Content as string) == "编辑")?.Visibility ==
+                             System.Windows.Visibility.Collapsed));
+                        log.AppendLine("HistoryDeleteButtonHidden=" +
+                            (FindVisual<System.Windows.Controls.Button>(historyItem,
+                                b => (b.Content as string) == "删除")?.Visibility ==
+                             System.Windows.Visibility.Collapsed));
+                        log.AppendLine("HistoryQuoteButtonVisible=" +
+                            (FindVisual<System.Windows.Controls.Button>(historyItem,
+                                b => (b.Content as string) == "引用")?.Visibility ==
+                             System.Windows.Visibility.Visible));
+                    }
+
+                    var longRow = _vm.Notes.FirstOrDefault(n => n.Text.Length > 100);
+                    log.AppendLine("LongNoteCanFold=" + (longRow?.CanFold == true));
+                    log.AppendLine("LongNoteInitiallyCollapsed=" + (longRow?.IsCollapsed == true));
+                    var longIndex = longRow == null ? -1 : _vm.Notes.IndexOf(longRow);
+                    var longItem = longIndex >= 0
+                        ? noteList?.ItemContainerGenerator.ContainerFromIndex(longIndex)
+                            as System.Windows.Controls.ListBoxItem
+                        : null;
+                    if (longItem != null)
+                    {
+                        var foldButton = FindVisual<System.Windows.Controls.Button>(longItem,
+                            b => (b.Content as string) == "展开全文");
+                        log.AppendLine("FoldButtonVisible=" +
+                            (foldButton?.Visibility == System.Windows.Visibility.Visible));
+                    }
+                    longRow?.ToggleFoldCommand.Execute(null);
+                    log.AppendLine("LongNoteExpanded=" + (longRow?.IsExpanded == true));
+                    log.AppendLine("LongNoteFoldTextChanged=" + (longRow?.FoldText == "收起"));
+                    longRow?.ToggleFoldCommand.Execute(null);
+                    log.AppendLine("LongNoteCollapsedAgain=" + (longRow?.IsCollapsed == true));
+                    _vm.SelectedDate = DateTime.Today;
                 }
                 catch (Exception ex)
                 {

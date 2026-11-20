@@ -53,6 +53,29 @@
         </Setter>
     </Style>
 
+    <Style x:Key="TabButton" TargetType="Button">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondary}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#F2F1ED" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="SubtleButton" TargetType="Button">
         <Setter Property="FontSize" Value="11" />
         <Setter Property="Foreground" Value="{StaticResource TextSecondary}" />
@@ -248,6 +271,25 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <Style x:Key="NoteListItem" TargetType="ListBoxItem">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0,0,0,8" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <ContentPresenter />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="QuoteChipButton" TargetType="Button" BasedOn="{StaticResource LinkButton}">
+        <Setter Property="FontSize" Value="10.5" />
+        <Setter Property="Padding" Value="0" />
     </Style>
 
     <!-- ============ 设置界面 ============ -->

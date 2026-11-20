@@ -200,6 +200,30 @@ public partial class MainWindow : Window
         }));
     }
 
+    /// <summary>Quoting a past note lands the caret in today's note editor.</summary>
+    public void FocusNoteBox()
+    {
+        if (!IsVisible) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!IsVisible) return;
+            NoteBox.Focus();
+            NoteBox.CaretIndex = NoteBox.Text.Length;
+        }));
+    }
+
+    private void NoteInputArea_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!NoteBox.IsKeyboardFocusWithin) NoteBox.Focus();
+    }
+
+    private void NoteBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || Keyboard.Modifiers == ModifierKeys.Shift) return;
+        if (DataContext is MainViewModel vm) vm.SaveNoteCommand.Execute(null);
+        e.Handled = true;
+    }
+
     // Belt-and-braces: keep CanAdd in sync even if the binding is ever lost.
     private void TitleBox_TextChanged(object sender, TextChangedEventArgs e)
     {

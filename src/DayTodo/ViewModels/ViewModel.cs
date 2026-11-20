@@ -60,6 +60,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly Action<string>? _notify;
     private readonly Func<DateTime, DateTime?>? _pickDate;
     private readonly Action? _focusEditor;
+    private readonly Action? _focusNoteEditor;
     private DateTime _selectedDate = DateTime.Today;
     private string _newTitle = string.Empty;
     private string _newTags = string.Empty;
@@ -72,6 +73,13 @@ public sealed class MainViewModel : ObservableObject
     private bool _viewingToday = true;
     private DateTime? _nextFutureDate;
     private int _futureCount;
+    private bool _showNotes;
+    private string _newNoteText = string.Empty;
+    private NoteItem? _editingNote;
+    private int _todayNoteCount;
+
+    /// <summary>Quotes waiting to be attached to the note being written or edited.</summary>
+    private readonly List<NoteReference> _pendingQuotes = new();
 
     /// <summary>The plan that was recalled and is waiting in the editor to be sent again.</summary>
     private TaskItem? _draft;
@@ -80,6 +88,7 @@ public sealed class MainViewModel : ObservableObject
     private bool _draftPending;
 
     public ObservableCollection<TaskRowViewModel> Rows { get; } = new();
+    public ObservableCollection<NoteRowViewModel> Notes { get; } = new();
 
     public ICommand PrevDayCommand { get; }
     public ICommand NextDayCommand { get; }
@@ -87,14 +96,21 @@ public sealed class MainViewModel : ObservableObject
     public ICommand AddCommand { get; }
     public ICommand SetPriorityCommand { get; }
     public ICommand GoToFutureCommand { get; }
+    public ICommand ShowTasksCommand { get; }
+    public ICommand ShowNotesCommand { get; }
+    public ICommand SaveNoteCommand { get; }
+    public ICommand CancelNoteEditCommand { get; }
+    public ICommand ClearQuotesCommand { get; }
 
     public MainViewModel(AppData data, Action<string>? notify = null,
-        Func<DateTime, DateTime?>? pickDate = null, Action? focusEditor = null)
+        Func<DateTime, DateTime?>? pickDate = null, Action? focusEditor = null,
+        Action? focusNoteEditor = null)
     {
         _data = data;
         _notify = notify;
         _pickDate = pickDate;
         _focusEditor = focusEditor;
+        _focusNoteEditor = focusNoteEditor;
 
         PrevDayCommand = new RelayCommand(_ => MoveDay(-1));
         NextDayCommand = new RelayCommand(_ => MoveDay(1));
@@ -102,6 +118,11 @@ public sealed class MainViewModel : ObservableObject
         AddCommand = new RelayCommand(_ => AddTask());
         SetPriorityCommand = new RelayCommand(p => SetPriority(p));
         GoToFutureCommand = new RelayCommand(_ => GoToFuture());
+        ShowTasksCommand = new RelayCommand(_ => ShowTab(false));
+        ShowNotesCommand = new RelayCommand(_ => ShowTab(true));
+        SaveNoteCommand = new RelayCommand(_ => SaveNote());
+        CancelNoteEditCommand = new RelayCommand(_ => CancelNoteEdit());
+        ClearQuotesCommand = new RelayCommand(_ => ClearQuotes());
 
         Rebuild();
     }
@@ -117,6 +138,10 @@ public sealed class MainViewModel : ObservableObject
         if (!Set(ref _selectedDate, value.Date)) return;
         OnPropertyChanged(nameof(SelectedDate));
         _viewingToday = value.Date == DateTime.Today;
+
+        // A draft belongs to one day only. Leaving that day discards it instead of
+        // letting a note written yesterday land on today by accident.
+        CancelNoteEdit();
         Rebuild();
     }
 
@@ -129,6 +154,66 @@ public sealed class MainViewModel : ObservableObject
     public bool IsHistory => DateUtil.Compare(Sel(), DateUtil.Today()) < 0;
 
     public bool CanEdit => !IsHistory;
+
+    // ---- 随记 ----
+
+    public bool IsTasksTab => !_showNotes;
+    public bool IsNotesTab => _showNotes;
+    public bool ShowTaskProgress => !_showNotes;
+
+    /// <summary>Notes are writable only on the real today, never on a browsed day.</summary>
+    public bool CanWriteNote => IsToday;
+
+    public bool HasNoNotes => Notes.Count == 0;
+
+    public bool NoteReadOnlyVisible => !CanWriteNote;
+
+    public int TodayNoteCount
+    {
+        get => _todayNoteCount;
+        private set => Set(ref _todayNoteCount, value);
+    }
+
+    public string NewNoteText
+    {
+        get => _newNoteText;
+        set
+        {
+            if (!Set(ref _newNoteText, value)) return;
+            OnPropertyChanged(nameof(CanSaveNote));
+            OnPropertyChanged(nameof(NoteHintVisible));
+        }
+    }
+
+    public bool CanSaveNote => CanWriteNote && !string.IsNullOrWhiteSpace(_newNoteText);
+
+    public bool NoteHintVisible => string.IsNullOrEmpty(_newNoteText);
+
+    public bool IsEditingNote => _editingNote != null;
+
+    public string NoteEditorHintText => _editingNote == null
+        ? string.Empty
+        : "正在编辑 " + (_editingNote.CreatedAt.Length >= 5
+            ? _editingNote.CreatedAt.Substring(0, 5) : _editingNote.CreatedAt) + " 的随记";
+
+    public bool HasPendingQuotes => _pendingQuotes.Count > 0;
+
+    public string PendingQuoteText => _pendingQuotes.Count == 0
+        ? string.Empty
+        : "引用 " + _pendingQuotes.Count + " 条 · " + string.Join("、",
+            _pendingQuotes.Select(q => ShortDate(q.Date)));
+
+    public string NoteSummaryText => IsToday
+        ? $"{WeekdayText} · {Notes.Count} 条随记 · 只有今天可以新增"
+        : IsHistory
+            ? $"{WeekdayText} · {Notes.Count} 条随记 · 历史只读"
+            : $"{WeekdayText} · 未来没有随记";
+
+    public string NoteReadOnlyText => IsHistory
+        ? "这一天的随记已封存，只能查看和引用"
+        : "未来的随记还不能写，回到今天再记";
+
+    public string HeaderSummaryText => _showNotes ? NoteSummaryText : SummaryText;
 
     /// <summary>Runtime state of the MCP service, shown under the sidebar switch.</summary>
     public string McpStatusText
@@ -219,6 +304,23 @@ public sealed class MainViewModel : ObservableObject
 
     private string Sel() => DateUtil.From(_selectedDate);
 
+    private static string ShortDate(string date)
+    {
+        if (!DateUtil.IsValid(date)) return date;
+        var d = DateOnly.ParseExact(date, DateUtil.Format, CultureInfo.InvariantCulture);
+        return d.Month + "/" + d.Day;
+    }
+
+    private void ShowTab(bool notes)
+    {
+        if (_showNotes == notes) return;
+        _showNotes = notes;
+        OnPropertyChanged(nameof(IsTasksTab));
+        OnPropertyChanged(nameof(IsNotesTab));
+        OnPropertyChanged(nameof(ShowTaskProgress));
+        OnPropertyChanged(nameof(HeaderSummaryText));
+    }
+
     private void MoveDay(int delta) => SetSelectedDate(_selectedDate.AddDays(delta));
 
     private void GoToFuture()
@@ -275,6 +377,156 @@ public sealed class MainViewModel : ObservableObject
         // A recalled plan that gets sent again is a plan again: the draft slot is free.
         ApplyDraft(null);
 
+        Commit();
+    }
+
+    // ---- 随记操作 ----
+
+    private void SaveNote()
+    {
+        if (!CanWriteNote) return;
+        var text = _newNoteText.Trim();
+        if (text.Length == 0) return;
+
+        if (_editingNote != null)
+        {
+            // Editing keeps identity, day and timestamp: a note never moves days.
+            _editingNote.Text = text;
+            _editingNote.References = _pendingQuotes.ToList();
+        }
+        else
+        {
+            _data.Notes.Add(new NoteItem
+            {
+                Date = DateUtil.Today(),
+                CreatedAt = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
+                Text = text,
+                References = _pendingQuotes.ToList()
+            });
+        }
+
+        CancelNoteEdit();
+        Commit();
+    }
+
+    private void EditNote(NoteItem note)
+    {
+        if (!CanWriteNote || note.Date != DateUtil.Today()) return;
+
+        _editingNote = note;
+        _newNoteText = note.Text;
+        _pendingQuotes.Clear();
+        _pendingQuotes.AddRange(note.References);
+
+        OnPropertyChanged(nameof(NewNoteText));
+        OnPropertyChanged(nameof(IsEditingNote));
+        OnPropertyChanged(nameof(NoteEditorHintText));
+        OnPropertyChanged(nameof(CanSaveNote));
+        OnPropertyChanged(nameof(NoteHintVisible));
+        OnPropertyChanged(nameof(PendingQuoteText));
+        OnPropertyChanged(nameof(HasPendingQuotes));
+        _focusNoteEditor?.Invoke();
+    }
+
+    private void DeleteNote(NoteItem note)
+    {
+        if (!CanWriteNote || note.Date != DateUtil.Today()) return;
+        _data.Notes.Remove(note);
+        if (_editingNote == note) CancelNoteEdit();
+        Commit();
+    }
+
+    /// <summary>
+    /// Quotes a note from any day. The target day is switched first so the editor
+    /// stays alive, then the quote is attached to today's draft.
+    /// </summary>
+    private void QuoteNote(NoteItem note)
+    {
+        if (!ShowTabAndGoToday()) return;
+        if (_pendingQuotes.Any(q => q.NoteId == note.Id && q.Date == note.Date))
+        {
+            _notify?.Invoke("这条随记已经在引用里了");
+            return;
+        }
+
+        _pendingQuotes.Add(new NoteReference
+        {
+            Date = note.Date,
+            NoteId = note.Id,
+            Text = QuoteSnapshot(note.Text)
+        });
+
+        OnPropertyChanged(nameof(PendingQuoteText));
+        OnPropertyChanged(nameof(HasPendingQuotes));
+        _focusNoteEditor?.Invoke();
+    }
+
+    /// <summary>Clicking a quote chip jumps to the quoted day with its note tab open.</summary>
+    private void OpenQuote(string date)
+    {
+        if (!DateUtil.IsValid(date)) return;
+        ShowTab(true);
+        SetSelectedDate(DateTime.ParseExact(date, DateUtil.Format, CultureInfo.InvariantCulture));
+    }
+
+    private bool ShowTabAndGoToday()
+    {
+        ShowTab(true);
+        if (!IsToday) SetSelectedDate(DateTime.Today);
+        return CanWriteNote;
+    }
+
+    private void ClearQuotes()
+    {
+        _pendingQuotes.Clear();
+        OnPropertyChanged(nameof(PendingQuoteText));
+        OnPropertyChanged(nameof(HasPendingQuotes));
+    }
+
+    private void CancelNoteEdit()
+    {
+        _editingNote = null;
+        _newNoteText = string.Empty;
+        _pendingQuotes.Clear();
+        OnPropertyChanged(nameof(NewNoteText));
+        OnPropertyChanged(nameof(IsEditingNote));
+        OnPropertyChanged(nameof(NoteEditorHintText));
+        OnPropertyChanged(nameof(CanSaveNote));
+        OnPropertyChanged(nameof(NoteHintVisible));
+        OnPropertyChanged(nameof(PendingQuoteText));
+        OnPropertyChanged(nameof(HasPendingQuotes));
+    }
+
+    private static string QuoteSnapshot(string text)
+    {
+        var oneLine = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return oneLine.Length <= 60 ? oneLine : oneLine.Substring(0, 60) + "…";
+    }
+
+    internal static string ResolveQuote(AppData data, NoteReference quote)
+    {
+        var source = data.Notes.FirstOrDefault(n => n.Id == quote.NoteId && n.Date == quote.Date);
+        return source != null ? QuoteSnapshot(source.Text) : quote.Text;
+    }
+
+    /// <summary>Public helpers used by the --verify smoke test.</summary>
+    public void SaveNoteForVerify(string text)
+    {
+        NewNoteText = text;
+        SaveNote();
+    }
+
+    public void QuoteNoteForVerify(NoteItem note) => QuoteNote(note);
+
+    /// <summary>Seeds a note on an arbitrary day for the read-only smoke test.</summary>
+    public void SeedNoteForVerify(string date, string text)
+    {
+        _data.Notes.Add(new NoteItem
+        {
+            Date = date,
+            CreatedAt = "09:00:00",
+            Text = text
+        });
         Commit();
     }
 
@@ -374,6 +626,9 @@ public sealed class MainViewModel : ObservableObject
     {
         var jump = _viewingToday;
         var moved = RolloverService.Run(_data, DateUtil.Today());
+
+        // Yesterday's editor must not survive midnight: notes are day-bound.
+        CancelNoteEdit();
         DataStore.Save(_data);
 
         if (jump) SetSelectedDate(DateTime.Today);
@@ -400,6 +655,19 @@ public sealed class MainViewModel : ObservableObject
         Rows.Clear();
         foreach (var r in rows) Rows.Add(r);
 
+        var noteRows = _data.Notes
+            .Where(n => n.Date == sel)
+            .OrderBy(n => n.CreatedAt, StringComparer.Ordinal)
+            .ThenBy(n => n.Id)
+            .Select(n => new NoteRowViewModel(n, IsToday,
+                q => ResolveQuote(_data, q), EditNote, DeleteNote, QuoteNote, OpenQuote))
+            .ToList();
+
+        Notes.Clear();
+        foreach (var n in noteRows) Notes.Add(n);
+
+        TodayNoteCount = _data.Notes.Count(n => n.Date == today);
+
         DoneCount = rows.Count(r => r.IsDone);
         TotalCount = rows.Count;
         CarryCount = rows.Count(r => !r.IsDone && r.Model.PostponeDays > 0);
@@ -416,6 +684,14 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CanAdd));
         OnPropertyChanged(nameof(HasNoTasks));
         OnPropertyChanged(nameof(SummaryText));
+        OnPropertyChanged(nameof(CanWriteNote));
+        OnPropertyChanged(nameof(NoteReadOnlyVisible));
+        OnPropertyChanged(nameof(CanSaveNote));
+        OnPropertyChanged(nameof(HasNoNotes));
+        OnPropertyChanged(nameof(NoteSummaryText));
+        OnPropertyChanged(nameof(NoteReadOnlyText));
+        OnPropertyChanged(nameof(HeaderSummaryText));
+        OnPropertyChanged(nameof(TodayNoteCount));
     }
 
     /// <summary>Keeps the "future plans" entry point in sync with the task list.</summary>
@@ -579,5 +855,104 @@ public sealed class TaskRowViewModel : ObservableObject
 
         if (DateUtil.Compare(sel, today) > 0)
             Set("计划任务", CBlueBack, CBlueText);
+    }
+}
+
+/// <summary>One entry in a note's quote list. Clicking it opens the quoted day.</summary>
+public sealed class NoteQuoteDisplay : ObservableObject
+{
+    public NoteQuoteDisplay(NoteReference model, string text, ICommand openCommand)
+    {
+        Model = model;
+        Text = text;
+        OpenCommand = openCommand;
+        var d = DateOnly.ParseExact(model.Date, DateUtil.Format, CultureInfo.InvariantCulture);
+        DateText = d.Month + "/" + d.Day;
+    }
+
+    public NoteReference Model { get; }
+    public string Text { get; }
+    public string DateText { get; }
+    public ICommand OpenCommand { get; }
+}
+
+public sealed class NoteRowViewModel : ObservableObject
+{
+    private readonly Action<NoteItem> _edit;
+    private readonly Action<NoteItem> _delete;
+    private readonly Action<NoteItem> _quote;
+    private bool _isExpanded;
+
+    public NoteRowViewModel(NoteItem model, bool canEdit,
+        Func<NoteReference, string> resolve,
+        Action<NoteItem> edit, Action<NoteItem> delete,
+        Action<NoteItem> quote, Action<string> openQuote)
+    {
+        Model = model;
+        CanEdit = canEdit;
+        _edit = edit;
+        _delete = delete;
+        _quote = quote;
+
+        EditCommand = new RelayCommand(_ => _edit(Model), _ => CanEdit);
+        DeleteCommand = new RelayCommand(_ => _delete(Model), _ => CanEdit);
+        QuoteCommand = new RelayCommand(_ => _quote(Model));
+
+        CanFold = EstimateLines(model.Text) > 3;
+        ToggleFoldCommand = new RelayCommand(_ =>
+        {
+            if (CanFold) IsExpanded = !IsExpanded;
+        });
+
+        Quotes = model.References
+            .Where(r => r != null)
+            .Select(r => new NoteQuoteDisplay(r, resolve(r),
+                new RelayCommand(_ => openQuote(r.Date))))
+            .ToList();
+    }
+
+    public NoteItem Model { get; }
+
+    public string Time => Model.CreatedAt.Length >= 5
+        ? Model.CreatedAt.Substring(0, 5)
+        : Model.CreatedAt;
+
+    public string Text => Model.Text;
+
+    public bool CanEdit { get; }
+
+    public IReadOnlyList<NoteQuoteDisplay> Quotes { get; }
+
+    public bool HasQuotes => Quotes.Count > 0;
+
+    /// <summary>Only long notes get a fold toggle.</summary>
+    public bool CanFold { get; }
+
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        private set
+        {
+            if (!Set(ref _isExpanded, value)) return;
+            OnPropertyChanged(nameof(IsCollapsed));
+            OnPropertyChanged(nameof(FoldText));
+        }
+    }
+
+    public bool IsCollapsed => !IsExpanded;
+
+    public string FoldText => IsExpanded ? "收起" : "展开全文";
+
+    public ICommand ToggleFoldCommand { get; }
+    public ICommand EditCommand { get; }
+    public ICommand DeleteCommand { get; }
+    public ICommand QuoteCommand { get; }
+
+    /// <summary>Rough line estimate for the card width; three lines or fewer stay open.</summary>
+    private static int EstimateLines(string text)
+    {
+        const int charsPerLine = 24;
+        return text.Split('\n')
+            .Sum(line => Math.Max(1, (int)Math.Ceiling(line.Length / (double)charsPerLine)));
     }
 }

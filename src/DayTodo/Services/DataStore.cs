@@ -31,7 +31,7 @@ namespace DayTodo.Services;
 /// </summary>
 public static class DataStore
 {
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -144,6 +144,15 @@ public static class DataStore
                     if (!seen.Add(task.Id)) continue;
                     data.Tasks.Add(task);
                 }
+
+                day.Notes ??= new List<NoteItem>();
+                foreach (var note in day.Notes)
+                {
+                    if (note == null || string.IsNullOrWhiteSpace(note.Text)) continue;
+                    if (!DateUtil.IsValid(note.Date)) note.Date = date;
+                    note.References ??= new List<NoteReference>();
+                    data.Notes.Add(note);
+                }
             }
 
             // Only fall back to the legacy file when there is literally nothing else.
@@ -151,7 +160,11 @@ public static class DataStore
             if (!loadedAny)
             {
                 var fallback = LoadLegacyFallback();
-                if (fallback != null) data.Tasks.AddRange(fallback.Tasks);
+                if (fallback != null)
+                {
+                    data.Tasks.AddRange(fallback.Tasks);
+                    data.Notes.AddRange(fallback.Notes);
+                }
             }
 
             Sanitize(data);
@@ -201,6 +214,7 @@ public static class DataStore
                     if (recovered == null) continue;
                     recovered.Date = date;
                     recovered.Tasks ??= new List<TaskItem>();
+                    recovered.Notes ??= new List<NoteItem>();
                     AtomicWrite(path, Serialize(recovered));
                     return recovered;
                 }
@@ -229,6 +243,17 @@ public static class DataStore
             if (t.Priority < 0 || t.Priority > 2) t.Priority = 1;
             if (t.PostponeDays < 0) t.PostponeDays = 0;
             t.Tags ??= new List<string>();
+        }
+
+        data.Notes ??= new List<NoteItem>();
+        data.Notes.RemoveAll(n => n == null || string.IsNullOrWhiteSpace(n.Text));
+        foreach (var n in data.Notes)
+        {
+            if (n.Id == Guid.Empty) n.Id = Guid.NewGuid();
+            if (!DateUtil.IsValid(n.Date)) n.Date = today;
+            if (string.IsNullOrWhiteSpace(n.CreatedAt)) n.CreatedAt = "00:00:00";
+            n.References ??= new List<NoteReference>();
+            n.References.RemoveAll(r => r == null || !DateUtil.IsValid(r.Date) || r.NoteId == Guid.Empty);
         }
     }
 
@@ -259,19 +284,29 @@ public static class DataStore
         if (legacy != null)
         {
             Sanitize(legacy);
-            foreach (var group in legacy.Tasks.GroupBy(t => t.DateCurrent, StringComparer.Ordinal))
+            var legacyDays = legacy.Tasks.GroupBy(t => t.DateCurrent, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+            var legacyNotes = new Dictionary<string, List<NoteItem>>(StringComparer.Ordinal);
+            foreach (var group in legacy.Notes.GroupBy(n => n.Date, StringComparer.Ordinal))
+            {
+                if (!legacyDays.TryGetValue(group.Key, out _)) legacyDays[group.Key] = new List<TaskItem>();
+                legacyNotes[group.Key] = group.ToList();
+            }
+            foreach (var pair in legacyDays)
             {
                 try
                 {
-                    AtomicWrite(PathFor(group.Key), Serialize(new DayFile
+                    AtomicWrite(PathFor(pair.Key), Serialize(new DayFile
                     {
-                        Date = group.Key,
-                        Tasks = group.ToList()
+                        Date = pair.Key,
+                        Tasks = pair.Value,
+                        Notes = legacyNotes.TryGetValue(pair.Key, out var notes)
+                            ? notes : new List<NoteItem>()
                     }));
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine("DayTodo 迁移 " + group.Key + " 失败：" + ex.Message);
+                    Debug.WriteLine("DayTodo 迁移 " + pair.Key + " 失败：" + ex.Message);
                 }
             }
         }
@@ -322,37 +357,49 @@ public static class DataStore
         var groups = data.Tasks
             .GroupBy(t => t.DateCurrent, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+        var noteGroups = data.Notes
+            .GroupBy(n => n.Date, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+        var days = new HashSet<string>(groups.Keys.Concat(noteGroups.Keys), StringComparer.Ordinal);
 
         // Days that already exist on disk must be written too, even when empty:
         // that is how a rolled-over or rescheduled task leaves its old file.
         foreach (var path in EnumerateDayFiles())
         {
             TryParseDayFileName(Path.GetFileName(path), out var date);
-            if (!groups.ContainsKey(date)) groups[date] = new List<TaskItem>();
+            days.Add(date);
         }
 
         // A fresh install should still have a real "today" file to look at.
         var today = DateUtil.Today();
-        if (!groups.ContainsKey(today)) groups[today] = new List<TaskItem>();
+        days.Add(today);
 
         var failures = new List<string>();
-        foreach (var pair in groups.OrderBy(p => p.Key, StringComparer.Ordinal))
+        foreach (var day in days.OrderBy(d => d, StringComparer.Ordinal))
         {
             try
             {
-                var json = Serialize(new DayFile { Date = pair.Key, Tasks = pair.Value });
-                var path = PathFor(pair.Key);
+                groups.TryGetValue(day, out var tasks);
+                noteGroups.TryGetValue(day, out var notes);
+                var json = Serialize(new DayFile
+                {
+                    Date = day,
+                    Tasks = tasks ?? new List<TaskItem>(),
+                    Notes = notes ?? new List<NoteItem>()
+                });
+                var path = PathFor(day);
                 var existing = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : null;
 
                 // Dirty check: identical text means no write, no backup, no sync churn.
                 if (string.Equals(existing, json, StringComparison.Ordinal)) continue;
 
-                if (existing != null) BackupDay(pair.Key, existing);
+                if (existing != null) BackupDay(day, existing);
                 AtomicWrite(path, json);
             }
             catch (Exception ex)
             {
-                failures.Add(pair.Key + ": " + ex.Message);
+                failures.Add(day + ": " + ex.Message);
             }
         }
 
@@ -404,11 +451,15 @@ public static class DataStore
             {
                 var bytes = File.ReadAllBytes(path);
                 var count = 0;
+                var noteCount = 0;
                 using (var doc = JsonDocument.Parse(bytes))
                 {
                     if (doc.RootElement.TryGetProperty("Tasks", out var array) &&
                         array.ValueKind == JsonValueKind.Array)
                         count = array.GetArrayLength();
+                    if (doc.RootElement.TryGetProperty("Notes", out var notes) &&
+                        notes.ValueKind == JsonValueKind.Array)
+                        noteCount = notes.GetArrayLength();
                 }
 
                 manifest.Days.Add(new ManifestDay
@@ -416,6 +467,7 @@ public static class DataStore
                     Date = Path.GetFileNameWithoutExtension(path),
                     File = Path.GetFileName(path),
                     Count = count,
+                    NoteCount = noteCount,
                     Sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()
                 });
             }

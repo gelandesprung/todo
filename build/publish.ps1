@@ -84,7 +84,13 @@ if ($Installer) {
         return
     }
     $iss = Join-Path $PSScriptRoot "installer.iss"
-    & $iscc $iss
+    $versionText = Get-Content $proj -Raw
+    if ($versionText -notmatch '<Version>([^<]+)</Version>') {
+        throw "No <Version> found in $proj"
+    }
+    $version = $Matches[1].Trim()
+    Write-Host "== Installer version: $version =="
+    & $iscc $iss "/dMyAppVersion=$version"
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
     Get-ChildItem (Join-Path $root "dist\installer") -Filter "*.exe" | ForEach-Object {
         Write-Host ("Installer: {0} ({1} MB)" -f $_.FullName, [Math]::Round($_.Length / 1MB, 1))
