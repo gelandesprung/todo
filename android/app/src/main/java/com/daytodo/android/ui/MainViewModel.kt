@@ -28,12 +28,11 @@ data class TaskRow(
     val carriedDays: Long = 0
 )
 
-data class DayStats(
-    val done: Int = 0,
-    val total: Int = 0,
-    val carry: Int = 0,
-    val notes: Int = 0
-)
+/** 可撤销的操作快照。只保留最近一次，和桌面版「只留最后一条撤回」的行为一致。 */
+sealed interface UndoOp {
+    data class Tasks(val items: List<TaskItem>) : UndoOp
+    data class Note(val item: NoteItem) : UndoOp
+}
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = Repository(application)
@@ -61,16 +60,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var rows by mutableStateOf<List<TaskRow>>(emptyList())
         private set
 
-    var notes by mutableStateOf<List<NoteItem>>(emptyList())
+    /** 分组结果在 refresh() 里算一次，界面直接用，不在 composable 里过滤。 */
+    var carriedRows by mutableStateOf<List<TaskRow>>(emptyList())
         private set
 
-    var stats by mutableStateOf(DayStats())
+    var openRows by mutableStateOf<List<TaskRow>>(emptyList())
+        private set
+
+    var doneRows by mutableStateOf<List<TaskRow>>(emptyList())
+        private set
+
+    var notes by mutableStateOf<List<NoteItem>>(emptyList())
         private set
 
     var taskDraft by mutableStateOf("")
     var tagDraft by mutableStateOf("")
     var priorityDraft by mutableStateOf(1)
     var hasRecalledDraft by mutableStateOf(false)
+
+    /** 最近一次可撤销操作，null 表示没有可撤销的内容。 */
+    var lastUndo by mutableStateOf<UndoOp?>(null)
+        private set
 
     var noteDraft by mutableStateOf("")
     var editingNoteId by mutableStateOf<String?>(null)
@@ -124,30 +134,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun goToday() = selectDate(Dates.today())
 
     fun addTask() {
-        val title = taskDraft.trim()
-        if (title.isEmpty() || selectedDate != Dates.today()) return
-        val task = TaskItem(
-            id = newTaskId(),
-            date = selectedDate,
-            title = title,
-            tags = parseTags(tagDraft),
-            priority = priorityDraft
+        addTask(taskDraft, parseTags(tagDraft), priorityDraft)
+    }
+
+    /**
+     * 新面板的入口：标题、标签、优先级一次给全，不再依赖全局草稿字段。
+     * 今天和未来日期都能新增，只有历史日期是只读的。
+     */
+    fun addTask(title: String, tags: List<String>, priority: Int) {
+        val text = title.trim()
+        if (text.isEmpty() || selectedDate < Dates.today()) return
+        dayData(selectedDate).tasks.add(
+            TaskItem(
+                id = newTaskId(),
+                date = selectedDate,
+                title = text,
+                tags = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(4),
+                priority = priority
+            )
         )
-        dayData(selectedDate).tasks.add(task)
+        clearRecallDraft()
+        commit()
+    }
+
+    /** 清掉撤回草稿，面板关闭或保存后调用。 */
+    fun clearRecallDraft() {
+        hasRecalledDraft = false
         taskDraft = ""
         tagDraft = ""
         priorityDraft = 1
-        hasRecalledDraft = false
+    }
+
+    /** 把逗号分隔的标签串解析成列表，供面板初始化用。 */
+    fun tagsFrom(raw: String): List<String> = parseTags(raw)
+
+    /** 清除当前选中日的已完成任务，可撤销。 */
+    fun clearCompleted() {
+        val day = _data.days[selectedDate] ?: return
+        val removed = day.tasks.filter { it.done }
+        if (removed.isEmpty()) return
+        day.tasks.removeAll { it.done }
+        lastUndo = UndoOp.Tasks(removed)
+        commit()
+    }
+
+    /** 撤销最近一次删除 / 清除。 */
+    fun undo() {
+        when (val op = lastUndo) {
+            is UndoOp.Tasks -> op.items.forEach { dayData(it.date).tasks.add(it) }
+            is UndoOp.Note -> dayData(op.item.date).notes.add(op.item)
+            null -> return
+        }
+        lastUndo = null
         commit()
     }
 
     fun toggleTask(item: TaskItem) {
-        if (selectedDate != Dates.today()) return
+        if (selectedDate < Dates.today()) return
         updateTask(item.id) { it.copy(done = !it.done) }
     }
 
     fun recallTask(item: TaskItem) {
-        if (selectedDate != Dates.today()) return
+        if (selectedDate < Dates.today()) return
         val task = removeTask(item.id) ?: return
         taskDraft = task.title
         tagDraft = task.tags.joinToString(", ")
@@ -161,39 +209,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun rescheduleTask(item: TaskItem, date: String) = moveTask(item.id, date)
 
     fun deleteTask(item: TaskItem) {
-        removeTask(item.id) ?: return
+        val removed = removeTask(item.id) ?: return
+        lastUndo = UndoOp.Tasks(listOf(removed))
         commit()
     }
 
-    fun saveNote() {
-        val text = noteDraft.trim()
-        if (text.isEmpty() || selectedDate != Dates.today()) return
-        val day = dayData(selectedDate)
-        val quote = pendingQuote
-        val editingId = editingNoteId
-
-        if (editingId != null) {
-            val index = day.notes.indexOfFirst { it.id == editingId }
-            if (index >= 0) {
-                val old = day.notes[index]
-                val merged = (old.references + listOfNotNull(quote)).distinctBy { it.noteId }
-                day.notes[index] = old.copy(text = text, references = merged)
-            }
-        } else {
-            day.notes.add(
-                NoteItem(
-                    id = newNoteId(),
-                    date = selectedDate,
-                    createdAt = System.currentTimeMillis(),
-                    text = text,
-                    references = listOfNotNull(quote)
-                )
+    /** 面板入口：文本直接传入，不再走全局草稿字段。 */
+    fun addNote(text: String) {
+        val t = text.trim()
+        if (t.isEmpty() || selectedDate != Dates.today()) return
+        dayData(selectedDate).notes.add(
+            NoteItem(
+                id = newNoteId(),
+                date = selectedDate,
+                createdAt = System.currentTimeMillis(),
+                text = t,
+                references = listOfNotNull(pendingQuote)
             )
-        }
-
+        )
+        pendingQuote = null
         noteDraft = ""
         editingNoteId = null
+        commit()
+    }
+
+    /** 编辑保存：保留 Id / Date / CreatedAt，只换文本并合并引用。 */
+    fun updateNote(note: NoteItem, text: String) {
+        val t = text.trim()
+        if (t.isEmpty()) return
+        val day = dayData(note.date)
+        val index = day.notes.indexOfFirst { it.id == note.id }
+        if (index < 0) return
+        val old = day.notes[index]
+        val merged = (old.references + listOfNotNull(pendingQuote)).distinctBy { it.noteId }
+        day.notes[index] = old.copy(text = t, references = merged)
         pendingQuote = null
+        noteDraft = ""
+        editingNoteId = null
         commit()
     }
 
@@ -211,6 +263,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteNote(note: NoteItem) {
         val day = dayData(note.date)
         day.notes.removeAll { it.id == note.id }
+        lastUndo = UndoOp.Note(note)
         if (editingNoteId == note.id) cancelNoteEdit()
         commit()
     }
@@ -345,14 +398,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .thenBy { it.item.createdAt }
         )
 
+        carriedRows = rows.filter { !it.item.done && it.carriedDays > 0L }
+        openRows = rows.filter { !it.item.done && it.carriedDays == 0L }
+        doneRows = rows.filter { it.item.done }
+
         notes = _data.days[selectedDate]?.notes.orEmpty()
             .sortedByDescending { it.createdAt }
-
-        stats = DayStats(
-            done = rows.count { it.item.done },
-            total = rows.size,
-            carry = rows.count { it.carriedDays > 0 },
-            notes = notes.size
-        )
     }
 }

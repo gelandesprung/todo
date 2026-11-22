@@ -13,8 +13,8 @@ android {
         applicationId = "com.daytodo.android"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "1.2"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -44,6 +44,11 @@ android {
     buildFeatures {
         compose = true
     }
+}
+
+// 默认产物名是 app-debug.apk / app-release.apk，改成 DayTodo-<版本>-<构建类型>.apk
+base {
+    archivesName.set("DayTodo-${android.defaultConfig.versionName ?: "1.1"}")
 }
 
 dependencies {

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "DayTodoAndroid"
+rootProject.name = "DayTodo"
 include(":app")

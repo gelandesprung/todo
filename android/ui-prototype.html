@@ -1,0 +1,1193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DayTodo 安卓版 · UI / 交互优化原型</title>
+<style>
+/* ============ 设计 Token ============ */
+:root{
+  --accent:#378ADD; --accent-dark:#185FA5; --accent-light:#E6F1FB;
+  --bg:#F6F6F3; --surface:#FFFFFF; --panel:#FAFAF8;
+  --text:#1F1F1E; --text-2:#55544F; --text-3:#75736C;
+  --line:#ECEAE4; --line-strong:#DFDCD3; --chip:#F2F0E9;
+  --high:#C93B3B; --high-bg:#FCF0F0;
+  --mid:#9C5D00;  --mid-bg:#FBF2E4;
+  --low:#6E6C66;  --low-bg:#F1F0EC;
+  --ok:#2E7D5B;
+  --r-xs:6px; --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:22px;
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px;
+  --shadow-1:0 1px 2px rgba(31,31,30,.05), 0 1px 8px rgba(31,31,30,.04);
+  --shadow-2:0 8px 28px rgba(31,31,30,.14);
+  --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  font-family:var(--font); background:var(--bg); color:var(--text);
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4,p{margin:0}
+button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
+
+/* ============ 页面外壳 ============ */
+.page{max-width:1280px;margin:0 auto;padding:32px 24px 64px}
+.page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap;margin-bottom:28px}
+.ph-left{display:flex;gap:14px;align-items:center}
+.ph-mark{
+  width:44px;height:44px;border-radius:13px;background:var(--accent);color:#fff;
+  display:grid;place-items:center;font-size:22px;font-weight:700;flex:none;
+  box-shadow:0 4px 12px rgba(55,138,221,.28);
+}
+.page-head h1{font-size:20px;font-weight:650;letter-spacing:-.2px}
+.page-head p{font-size:13px;color:var(--text-3);margin-top:3px}
+.ph-tags{display:flex;gap:8px;flex-wrap:wrap}
+.ph-tag{font-size:12px;color:var(--text-2);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+
+.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:36px;align-items:start}
+@media(max-width:1040px){.layout{grid-template-columns:1fr}}
+
+/* ============ 手机外框 ============ */
+.stage{position:sticky;top:24px;display:flex;flex-direction:column;align-items:center;gap:16px}
+@media(max-width:1040px){.stage{position:static}}
+.phone{
+  position:relative;width:390px;height:844px;border-radius:44px;flex:none;
+  background:#111214;padding:12px;box-shadow:0 30px 70px rgba(20,20,22,.28),0 0 0 2px #2c2d30;
+}
+.phone-inner{
+  position:relative;width:100%;height:100%;border-radius:34px;overflow:hidden;background:var(--surface);
+  display:flex;flex-direction:column;
+}
+.status-bar{
+  height:40px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;
+  padding:0 22px 6px;font-size:12px;font-weight:600;color:var(--text);background:var(--surface);
+}
+.status-right{display:flex;gap:5px;align-items:center;opacity:.75}
+.pill-notch{position:absolute;top:10px;left:50%;transform:translateX(-50%);width:110px;height:26px;background:#111214;border-radius:14px;z-index:60}
+
+/* ============ 通用 UI ============ */
+.btn-icon{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;color:var(--text-2);transition:background .18s}
+.btn-icon:hover{background:var(--chip)}
+.btn-icon svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.chip{
+  display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--r-xs);
+  background:var(--chip);color:var(--text-2);font-size:12px;line-height:1;
+}
+.badge{
+  display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:var(--r-xs);
+  font-size:12px;line-height:1;font-weight:500;
+}
+.badge .dot{width:6px;height:6px;border-radius:50%;flex:none}
+.prio-high{color:var(--high);background:var(--high-bg)} .prio-high .dot{background:var(--high)}
+.prio-mid{color:var(--mid);background:var(--mid-bg)}   .prio-mid .dot{background:var(--mid)}
+.prio-low{color:var(--low);background:var(--low-bg)}   .prio-low .dot{background:var(--low)}
+.badge-carry{color:var(--accent-dark);background:var(--accent-light)}
+.primary-btn{
+  width:100%;height:44px;border-radius:var(--r-md);background:var(--accent);color:#fff;
+  font-size:14.5px;font-weight:600;display:grid;place-items:center;
+}
+.primary-btn:disabled{background:#C9D6E2;color:#fff}
+.ghost-btn{
+  width:100%;height:44px;border-radius:var(--r-md);background:var(--chip);color:var(--text-2);font-size:14px;display:grid;place-items:center;
+}
+
+/* ============ 主界面头部 ============ */
+.app-head{flex:none;background:var(--surface);border-bottom:1px solid var(--line);padding:4px 16px 0}
+.head-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.date-title{text-align:left;display:flex;flex-direction:column;gap:3px;padding:6px 0;cursor:pointer}
+.date-title .d-main{font-size:24px;font-weight:650;letter-spacing:-.4px;display:flex;align-items:baseline;gap:8px}
+.date-title .d-main .rel{
+  font-size:12px;font-weight:500;color:var(--accent-dark);background:var(--accent-light);
+  border-radius:999px;padding:3px 9px;letter-spacing:0;
+}
+.date-title .d-main .rel.readonly{color:var(--text-2);background:var(--chip)}
+.date-title .d-sub{font-size:13px;color:var(--text-3);display:flex;align-items:center;gap:6px}
+.date-title .d-sub .today-btn{color:var(--accent-dark);font-weight:500;font-size:12px}
+.head-actions{display:flex;gap:2px;padding-top:6px}
+
+/* 日期胶囊条 */
+.date-strip{
+  display:flex;gap:6px;overflow-x:auto;padding:12px 0 10px;scrollbar-width:none;
+  scroll-snap-type:x proximity;
+}
+.date-strip::-webkit-scrollbar{display:none}
+.dchip{
+  flex:none;width:46px;height:58px;border-radius:14px;background:var(--panel);border:1px solid transparent;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  scroll-snap-align:center;transition:background .18s,border-color .18s,transform .18s;position:relative;
+}
+.dchip:hover{background:var(--chip)}
+.dchip .dw{font-size:11px;color:var(--text-3);line-height:1}
+.dchip .dd{font-size:17px;font-weight:600;color:var(--text);line-height:1.1}
+.dchip.has::after{
+  content:"";position:absolute;bottom:5px;width:4px;height:4px;border-radius:50%;background:var(--accent);
+}
+.dchip.is-today .dw{color:var(--accent-dark);font-weight:600}
+.dchip.is-sel{background:var(--accent);border-color:var(--accent)}
+.dchip.is-sel .dw,.dchip.is-sel .dd{color:#fff}
+.dchip.is-sel.has::after{background:#fff}
+
+/* 进度摘要 */
+.summary{display:flex;align-items:center;gap:10px;padding-bottom:12px}
+.summary .stxt{font-size:13px;color:var(--text-2);white-space:nowrap}
+.summary .prog{flex:1;height:4px;border-radius:2px;background:var(--line);overflow:hidden}
+.summary .prog i{display:block;height:100%;background:var(--accent);border-radius:2px;transition:width .45s cubic-bezier(.2,.8,.2,1)}
+.summary .smore{font-size:13px;color:var(--accent-dark);font-weight:500;white-space:nowrap}
+
+/* ============ 列表 ============ */
+.list{flex:1;overflow-y:auto;padding:8px 0 120px;scrollbar-width:thin}
+.list::-webkit-scrollbar{width:0}
+.sec{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 6px}
+.sec-t{font-size:12px;font-weight:600;color:var(--text-3);letter-spacing:.4px;display:flex;align-items:center;gap:8px}
+.sec-t .cnt{font-weight:400;color:var(--text-3);background:var(--chip);border-radius:999px;padding:2px 7px;font-size:11px}
+.sec-act{font-size:12px;color:var(--accent-dark);font-weight:500}
+
+/* 任务行 */
+.task{
+  display:flex;align-items:flex-start;gap:12px;margin:0 12px 8px;padding:12px 12px 12px 14px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);
+  transition:transform .2s cubic-bezier(.2,.8,.2,1),opacity .2s,border-color .2s;
+}
+.task:hover{border-color:var(--line-strong)}
+.task.just-done{animation:taskDone .42s ease}
+@keyframes taskDone{0%{transform:scale(1)}35%{transform:scale(.975)}100%{transform:scale(1)}}
+.task.carried{border-left:3px solid var(--accent)}
+.check{
+  width:24px;height:24px;border-radius:50%;border:1.8px solid var(--line-strong);flex:none;margin-top:1px;
+  display:grid;place-items:center;transition:background .18s,border-color .18s;
+}
+.check svg{width:13px;height:13px;stroke:#fff;fill:none;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:22;stroke-dashoffset:22;transition:stroke-dashoffset .28s .04s ease}
+.check.on{background:var(--accent);border-color:var(--accent)}
+.check.on svg{stroke-dashoffset:0}
+.check:disabled{opacity:.45}
+.t-main{flex:1;min-width:0}
+.t-title{font-size:15px;line-height:1.4;color:var(--text);word-break:break-word;transition:color .2s}
+.t-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px}
+.task.done .t-title{color:var(--text-3);text-decoration:line-through}
+.task.done{opacity:.72}
+.more-btn{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;color:var(--text-3);flex:none;margin:-2px -4px 0 0}
+.more-btn:hover{background:var(--chip)}
+.more-btn svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round}
+
+/* 随记 */
+.note{margin:0 12px 8px;padding:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md)}
+.note-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.note-time{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.note-tag{font-size:11px;color:var(--accent-dark);background:var(--accent-light);border-radius:999px;padding:2px 8px}
+.note-text{font-size:15px;line-height:1.65;color:var(--text);white-space:pre-wrap;word-break:break-word}
+.note-text.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.note-more{font-size:13px;color:var(--accent-dark);font-weight:500;margin-top:8px;display:inline-block}
+.note-refs{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.ref{
+  display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--accent-dark);
+  background:var(--accent-light);border-radius:var(--r-xs);padding:5px 9px;max-width:100%;
+}
+.ref svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.8;flex:none}
+
+/* 空状态 */
+.empty{padding:56px 32px;text-align:center}
+.empty .icon{
+  width:56px;height:56px;border-radius:18px;background:var(--accent-light);color:var(--accent-dark);
+  display:grid;place-items:center;margin:0 auto 14px;
+}
+.empty .icon svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.empty h3{font-size:15px;font-weight:600;margin-bottom:6px}
+.empty p{font-size:13px;color:var(--text-3);line-height:1.6}
+
+/* 只读横幅 */
+.readonly-bar{
+  display:none;align-items:center;gap:8px;margin:10px 12px 0;padding:9px 12px;border-radius:var(--r-sm);
+  background:var(--panel);border:1px dashed var(--line-strong);color:var(--text-2);font-size:12px;
+}
+.readonly-bar svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8;flex:none}
+body.readonly .readonly-bar{display:flex}
+
+/* ============ FAB + 底栏 ============ */
+.fab{
+  position:absolute;right:18px;bottom:84px;width:56px;height:56px;border-radius:20px;background:var(--accent);
+  color:#fff;display:grid;place-items:center;box-shadow:0 8px 20px rgba(55,138,221,.38);z-index:30;
+  transition:transform .2s cubic-bezier(.2,.8,.2,1),opacity .2s;
+}
+.fab svg{width:24px;height:24px;stroke:#fff;fill:none;stroke-width:2.2;stroke-linecap:round}
+.fab:hover{transform:scale(1.05)}
+.fab:active{transform:scale(.95)}
+.fab.hide{opacity:0;transform:scale(.8);pointer-events:none}
+
+.bottom-nav{
+  position:absolute;left:0;right:0;bottom:0;height:64px;background:rgba(255,255,255,.94);
+  backdrop-filter:blur(12px);border-top:1px solid var(--line);display:flex;align-items:flex-start;
+  padding:6px 8px 0;z-index:25;
+}
+.nav-item{
+  flex:1;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--text-3);border-radius:var(--r-sm);transition:color .18s,background .18s;
+}
+.nav-item svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.nav-item span{font-size:11.5px}
+.nav-item.on{color:var(--accent-dark)}
+.nav-item.on svg{stroke-width:2}
+.nav-item:active{background:var(--chip)}
+
+/* ============ Snackbar ============ */
+.snackbar{
+  position:absolute;left:16px;right:16px;bottom:78px;background:#2B2B29;color:#fff;border-radius:10px;
+  padding:13px 14px;font-size:13.5px;display:flex;align-items:center;gap:10px;z-index:45;
+  opacity:0;transform:translateY(12px);pointer-events:none;transition:opacity .22s,transform .22s;
+  box-shadow:var(--shadow-2);
+}
+.snackbar.show{opacity:1;transform:translateY(0);pointer-events:auto}
+.snackbar .act{color:#8FC4F5;font-weight:600;font-size:13.5px;margin-left:auto;flex:none}
+
+/* ============ 底部面板 ============ */
+.overlay{
+  position:absolute;inset:0;background:rgba(20,20,22,.42);z-index:50;opacity:0;pointer-events:none;transition:opacity .24s;
+}
+.overlay.show{opacity:1;pointer-events:auto}
+.sheet{
+  position:absolute;left:0;right:0;bottom:0;z-index:55;background:var(--surface);
+  border-radius:var(--r-xl) var(--r-xl) 0 0;padding:10px 20px 18px;
+  transform:translateY(102%);transition:transform .3s cubic-bezier(.2,.85,.25,1);max-height:84%;overflow-y:auto;
+  box-shadow:0 -10px 40px rgba(20,20,22,.16);
+}
+.sheet.show{transform:translateY(0)}
+.grabber{width:36px;height:4px;border-radius:2px;background:var(--line-strong);margin:0 auto 14px}
+.sheet h2{font-size:17px;font-weight:650;margin-bottom:4px}
+.sheet .sub{font-size:13px;color:var(--text-3);margin-bottom:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.field-label{font-size:12px;font-weight:600;color:var(--text-3);margin:16px 0 8px;letter-spacing:.3px}
+.text-field{
+  width:100%;min-height:52px;border:1.5px solid var(--line-strong);border-radius:var(--r-md);padding:13px 14px;
+  font-size:15px;font-family:inherit;color:var(--text);background:var(--surface);resize:none;line-height:1.5;
+}
+.text-field:focus{outline:none;border-color:var(--accent)}
+.text-field::placeholder{color:#A9A79F}
+.seg{display:flex;gap:8px}
+.seg button{
+  flex:1;height:38px;border-radius:var(--r-sm);border:1.5px solid var(--line);background:var(--surface);
+  font-size:13.5px;color:var(--text-2);display:flex;align-items:center;justify-content:center;gap:6px;transition:all .16s;
+}
+.seg button .dot{width:8px;height:8px;border-radius:50%}
+.seg button.on{border-color:var(--accent);background:var(--accent-light);color:var(--accent-dark);font-weight:600}
+.seg button.on[data-p="high"] .dot{background:var(--high)}
+.seg button.on[data-p="mid"] .dot{background:var(--mid)}
+.seg button.on[data-p="low"] .dot{background:var(--low)}
+.tagbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tagbox .chip{height:28px;font-size:13px;padding:0 10px}
+.tagbox .chip.add{background:none;border:1px dashed var(--line-strong);color:var(--text-3)}
+.tagbox .chip .x{color:var(--text-3);margin-left:6px;font-size:14px;line-height:1;cursor:pointer}
+.tagbox:empty{display:none}
+.tag-row{display:flex;align-items:center;gap:6px;margin-top:6px}
+.tag-field{
+  flex:1;height:44px;border:1.5px solid var(--line-strong);border-radius:var(--r-md);padding:0 12px;
+  font-size:14px;font-family:inherit;background:var(--surface);color:var(--text);outline:none;
+}
+.tag-field:focus{border-color:var(--accent)}
+.tag-field::placeholder{color:#A9A79F}
+.tag-add{height:34px;padding:0 6px;background:none;border:none;color:var(--accent-dark);font-size:13px;font-weight:600;font-family:inherit}
+.tag-add:active{opacity:.6}
+.tag-input{
+  height:28px;width:84px;border:1px dashed var(--accent);border-radius:var(--r-xs);
+  font-size:13px;font-family:inherit;padding:0 8px;color:var(--text);background:var(--surface);outline:none;
+}
+.sheet-actions{display:flex;gap:10px;margin-top:14px}
+
+/* 操作列表 */
+.act-list{background:var(--panel);border-radius:var(--r-md);overflow:hidden;margin-top:4px}
+.act-item{
+  width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--surface);
+  border-bottom:1px solid var(--line);transition:background .15s;text-align:left;
+}
+.act-item:last-child{border-bottom:none}
+.act-item:hover{background:var(--chip)}
+.act-item .ai-ic{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;flex:none}
+.act-item .ai-ic svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.act-item .ai-t{font-size:15px;flex:1}
+.act-item .ai-h{font-size:12px;color:var(--text-3)}
+.act-item.danger .ai-t{color:var(--high)}
+.act-item.danger .ai-ic{background:var(--high-bg);color:var(--high)}
+
+/* 日历 */
+.cal-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.cal-head .m{font-size:16px;font-weight:600;flex:1;text-align:center}
+.cal-wk{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px}
+.cal-wk span{text-align:center;font-size:12px;color:var(--text-3);padding:4px 0}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cal-cell{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:50%;font-size:14px;color:var(--text);transition:background .16s}
+.cal-cell:hover{background:var(--chip)}
+.cal-cell.mute{color:var(--line-strong)}
+.cal-cell.sel{background:var(--accent);color:#fff;font-weight:600}
+.cal-cell .dots{display:flex;gap:2px;height:4px}
+.cal-cell .dots i{width:4px;height:4px;border-radius:50%;background:var(--accent)}
+.cal-cell .dots i.n{background:var(--mid)}
+.cal-cell.sel .dots i{background:#fff}
+.cal-legend{display:flex;gap:16px;justify-content:center;margin-top:14px;font-size:12px;color:var(--text-3)}
+.cal-legend span{display:flex;align-items:center;gap:5px}
+.cal-legend i{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.cal-legend i.n{background:var(--mid)}
+
+/* ============ 设置页 ============ */
+.settings{flex:1;overflow-y:auto;display:none;flex-direction:column;background:var(--bg)}
+.settings.on{display:flex}
+.set-bar{
+  flex:none;height:56px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--surface);
+  border-bottom:1px solid var(--line);
+}
+.set-bar h2{font-size:17px;font-weight:650;flex:1;padding-left:6px}
+.set-body{padding:16px 12px 24px;display:flex;flex-direction:column;gap:16px}
+.set-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden}
+.set-card > .ct{padding:14px 16px 0;font-size:12px;font-weight:600;color:var(--text-3);letter-spacing:.4px}
+.set-row{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);min-height:56px}
+.set-row:last-child{border-bottom:none}
+.set-row .st{font-size:15px;flex:1}
+.set-row .sh{font-size:12px;color:var(--text-3);margin-top:2px}
+.set-row .st-wrap{flex:1}
+.switch{width:48px;height:28px;border-radius:999px;background:var(--line-strong);position:relative;flex:none;transition:background .2s}
+.switch.on{background:var(--accent)}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:transform .2s}
+.switch.on::after{transform:translateX(20px)}
+.set-row .val{font-size:14px;color:var(--accent-dark);font-weight:500}
+.chevron{color:var(--text-3);font-size:18px}
+.about{padding:16px;font-size:13px;color:var(--text-3);line-height:1.7}
+
+/* ============ 文档区 ============ */
+.doc{display:flex;flex-direction:column;gap:20px}
+.doc-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px 22px;box-shadow:var(--shadow-1)}
+.doc-card h2{font-size:16px;font-weight:650;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.doc-card h2 .num{
+  width:22px;height:22px;border-radius:7px;background:var(--accent-light);color:var(--accent-dark);
+  font-size:12px;font-weight:700;display:grid;place-items:center;
+}
+.doc-card .lead{font-size:13px;color:var(--text-3);margin-bottom:16px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:10px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11.5px;color:var(--text-3);font-weight:600;letter-spacing:.3px}
+td:first-child{font-weight:500;white-space:nowrap}
+td code{font-size:12px;background:var(--panel);padding:1px 5px;border-radius:4px;color:var(--accent-dark);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+tr:last-child td{border-bottom:none}
+.prio{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 6px}
+.prio.p0{color:#fff;background:var(--high)}
+.prio.p1{color:#fff;background:var(--mid)}
+.prio.p2{color:var(--text-2);background:var(--chip)}
+.token-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.token{border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
+.token .sw{height:44px}
+.token .info{padding:8px 10px;font-size:11.5px;color:var(--text-2);background:var(--surface)}
+.token .info b{display:block;color:var(--text);font-size:12.5px;margin-bottom:2px}
+.token .info span{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-3)}
+.checklist{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:9px}
+.checklist li{display:flex;gap:10px;font-size:13px;color:var(--text-2);line-height:1.55}
+.checklist li::before{
+  content:"✓";flex:none;width:18px;height:18px;border-radius:50%;background:var(--accent-light);color:var(--accent-dark);
+  font-size:11px;font-weight:700;display:grid;place-items:center;margin-top:1px;
+}
+.checklist li.warn::before{content:"!";background:var(--high-bg);color:var(--high)}
+.kv{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:7px 0;border-bottom:1px dashed var(--line)}
+.kv:last-child{border-bottom:none}
+.kv b{font-weight:600}
+.stage-hint{font-size:12.5px;color:var(--text-3);text-align:center;max-width:390px;line-height:1.7}
+.stage-hint kbd{background:var(--surface);border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:5px;padding:1px 6px;font-size:11.5px;font-family:ui-monospace,Menlo,monospace}
+
+/* 现状线框小图 */
+.before{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.wire{
+  width:150px;height:290px;border:1px solid var(--line-strong);border-radius:10px;background:var(--surface);
+  padding:8px;display:flex;flex-direction:column;gap:5px;flex:none;
+}
+.wire .w-bar{height:16px;background:var(--chip);border-radius:4px}
+.wire .w-tabs{height:12px;background:var(--accent-light);border-radius:3px}
+.wire .w-date{height:22px;background:var(--panel);border-radius:4px}
+.wire .w-row{height:34px;border:1px solid var(--line);border-radius:5px;position:relative}
+.wire .w-row::before{content:"";position:absolute;left:5px;top:8px;width:8px;height:8px;border-radius:50%;border:1px solid var(--text-3)}
+.wire .w-row::after{content:"";position:absolute;left:18px;right:12px;top:11px;height:5px;background:var(--chip);border-radius:3px}
+.wire .w-input{height:40px;border:1px solid var(--line-strong);border-radius:5px;margin-top:auto}
+.wire .w-note{font-size:11px;color:var(--text-3);line-height:1.6;text-align:center;padding-top:6px}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="page-head">
+    <div class="ph-left">
+      <div class="ph-mark">✓</div>
+      <div>
+        <h1>DayTodo 安卓版 · UI / 交互优化原型</h1>
+        <p>基于现有 Compose 实现（<code style="font-size:12px">ui/DayTodoApp.kt</code>）的移动端重排方案 · 移动优先 · WCAG 2.2 AA</p>
+      </div>
+    </div>
+    <div class="ph-tags">
+      <span class="ph-tag">Material 3</span>
+      <span class="ph-tag">360–430dp 适配</span>
+      <span class="ph-tag">触控 ≥ 44dp</span>
+      <span class="ph-tag">对比度 ≥ 4.5:1</span>
+      <span class="ph-tag">Compose 可落地</span>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <!-- ================= 原型 ================= -->
+    <section class="stage">
+      <div class="phone">
+        <div class="pill-notch"></div>
+        <div class="phone-inner">
+
+          <div class="status-bar">
+            <span>9:41</span>
+            <span class="status-right">
+              <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2" width="3" height="9" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1"/></svg>
+              <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><path d="M7 9.5 5.2 7.6a2.7 2.7 0 0 1 3.6 0L7 9.5Zm3.8-3.9a6 6 0 0 0-7.6 0L1.8 4.2a8.5 8.5 0 0 1 10.4 0l-1.4 1.4ZM0 2.2a12 12 0 0 1 14 0l-1.4 1.4a10 10 0 0 0-11.2 0L0 2.2Z"/></svg>
+              <svg width="22" height="11" viewBox="0 0 22 11" fill="none"><rect x=".5" y=".5" width="19" height="10" rx="3" stroke="currentColor" opacity=".45"/><rect x="2" y="2" width="15" height="7" rx="1.6" fill="currentColor"/><path d="M21 4v3a2 2 0 0 0 0-3Z" fill="currentColor" opacity=".45"/></svg>
+            </span>
+          </div>
+
+          <!-- ===== 主界面 ===== -->
+          <div class="main-view" id="mainView" style="display:flex;flex-direction:column;flex:1;min-height:0">
+
+            <div class="app-head">
+              <div class="head-row">
+                <div class="date-title" id="dateTitleBtn" role="button" tabindex="0">
+                  <span class="d-main"><span id="dMain">11月21日</span><span class="rel" id="dRel">今天</span></span>
+                  <span class="d-sub"><span id="dWeek">周六</span><button class="today-btn" id="todayBtn">回到今天</button></span>
+                </div>
+                <div class="head-actions">
+                  <button class="btn-icon" id="searchBtn" title="搜索">
+                    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                  </button>
+                  <button class="btn-icon" id="calBtn" title="选择日期">
+                    <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="date-strip" id="dateStrip"></div>
+
+              <div class="summary">
+                <span class="stxt" id="sumTxt">2 / 7 完成 · 2 项顺延</span>
+                <div class="prog"><i id="sumProg" style="width:28%"></i></div>
+                <span class="smore" id="sumMore">清除已完成</span>
+              </div>
+            </div>
+
+            <div class="readonly-bar">
+              <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+              <span>历史记录 · 只读模式，勾选与编辑已关闭</span>
+            </div>
+
+            <div class="list" id="taskList"></div>
+            <div class="list" id="noteList" style="display:none"></div>
+          </div>
+
+          <!-- ===== 设置页 ===== -->
+          <div class="settings" id="settingsView">
+            <div class="set-bar">
+              <button class="btn-icon" id="backFromSettings">
+                <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+              </button>
+              <h2>设置</h2>
+            </div>
+            <div class="set-body">
+              <div class="set-card">
+                <div class="ct">通用</div>
+                <div class="set-row">
+                  <div class="st-wrap"><div class="st">每日提醒</div><div class="sh">每天 08:30 提醒查看清单</div></div>
+                  <button class="switch on" id="swReminder"></button>
+                </div>
+                <div class="set-row">
+                  <div class="st-wrap"><div class="st">提醒时间</div><div class="sh">点击修改</div></div>
+                  <span class="val">08:30</span><span class="chevron">›</span>
+                </div>
+                <div class="set-row">
+                  <div class="st-wrap"><div class="st">自动顺延未完成任务</div><div class="sh">跨天时保留原日期记录</div></div>
+                  <button class="switch on" id="swCarry"></button>
+                </div>
+              </div>
+              <div class="set-card">
+                <div class="ct">数据</div>
+                <div class="set-row">
+                  <div class="st-wrap"><div class="st">本地存储</div><div class="sh" style="word-break:break-all">/data/data/com.daytodo.android/files/daytodo-data.json</div></div>
+                </div>
+                <div class="set-row"><div class="st">导出备份</div><span class="chevron">›</span></div>
+                <div class="set-row"><div class="st">导入备份</div><span class="chevron">›</span></div>
+              </div>
+              <div class="set-card">
+                <div class="ct">关于</div>
+                <div class="about">DayTodo Android 1.1（优化版原型）<br>按天显示的轻量清单，未完成任务自动顺延到今天。</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== FAB ===== -->
+          <button class="fab" id="fab" title="新建">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+
+          <!-- ===== 底部导航 ===== -->
+          <nav class="bottom-nav" id="bottomNav">
+            <button class="nav-item on" data-tab="tasks">
+              <svg viewBox="0 0 24 24"><path d="M4 7h10M4 12h10M4 17h7"/><path d="M17 5l2 2 3-3"/></svg><span>任务</span>
+            </button>
+            <button class="nav-item" data-tab="notes">
+              <svg viewBox="0 0 24 24"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M8 13h8M8 17h5"/></svg><span>随记</span>
+            </button>
+            <button class="nav-item" data-tab="settings">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg><span>设置</span>
+            </button>
+          </nav>
+
+          <!-- ===== Snackbar ===== -->
+          <div class="snackbar" id="snackbar"><span id="snackText"></span><button class="act" id="snackAct">撤销</button></div>
+
+          <!-- ===== 遮罩 + 面板 ===== -->
+          <div class="overlay" id="overlay"></div>
+          <div class="sheet" id="sheet"></div>
+        </div>
+      </div>
+      <p class="stage-hint">
+        可交互原型：点底部导航切页 · 点日期胶囊切换日期 · 点圆圈完成 · 点 <b>⋯</b> 打开操作面板 · 点 <b>+</b> 新建 · 点日期标题开日历<br>
+        <kbd>Esc</kbd> 关闭面板
+      </p>
+    </section>
+
+    <!-- ================= 文档 ================= -->
+    <aside class="doc">
+
+      <div class="doc-card">
+        <h2><span class="num">1</span>现状诊断</h2>
+        <p class="lead">读现有 1288 行 Compose 实现后的问题清单，按影响面排序。</p>
+        <div class="before">
+          <div class="wire">
+            <div class="w-bar"></div><div class="w-tabs"></div><div class="w-date"></div>
+            <div class="w-row"></div><div class="w-row"></div><div class="w-row"></div><div class="w-row"></div>
+            <div class="w-input"></div>
+            <div class="w-note">现状：顶栏+Tab+日期头<br>三层叠在顶部，底部常驻输入区<br>字号 10–12sp</div>
+          </div>
+          <div style="flex:1;min-width:240px">
+            <div class="kv"><b>信息层级</b><span>顶栏 / Tab / 日期头 / 列表 / 常驻输入条，5 层挤在一屏</span></div>
+            <div class="kv"><b>正文字号</b><span>任务标题 12sp、标签 10sp、辅助 10sp —— 远低于移动端 14sp 基线</span></div>
+            <div class="kv"><b>触控目标</b><span>日期左右箭头仅 24dp、更多按钮 28dp，远低于 44dp 最小触控</span></div>
+            <div class="kv"><b>操作路径</b><span>改期 / 撤回 / 删除全部藏在「⋯ → 底部面板」两层之后</span></div>
+            <div class="kv"><b>添加任务</b><span>底部输入框 + 独立「添加任务」面板两条入口，标签/优先级只在面板里能改</span></div>
+            <div class="kv"><b>日期切换</b><span>只能靠左右箭头一天天翻，没有今天/本周的快速跳转</span></div>
+            <div class="kv"><b>反馈方式</b><span>用原生 Toast，对比度低、样式不可控、连点会互相顶掉</span></div>
+            <div class="kv"><b>信息表达</b><span>优先级只用左侧 3dp 色条区分 —— 纯色传达信息，无障碍不达标</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="doc-card">
+        <h2><span class="num">2</span>改版对照</h2>
+        <p class="lead">每一条都对应原型里可点的交互，且都能在 Compose 里落地。</p>
+        <table>
+          <thead><tr><th style="width:22%">模块</th><th style="width:34%">现状</th><th style="width:36%">新版做法</th><th style="width:8%;white-space:nowrap">级别</th></tr></thead>
+          <tbody>
+            <tr><td>顶部结构</td><td>Logo 顶栏 + TabRow + 日期头，三层固定</td><td>合并为「日期标题 + 日期胶囊条 + 进度」两层；任务/随记下沉到底部导航</td><td><span class="prio p0">P0</span></td></tr>
+            <tr><td>日期切换</td><td>仅 24dp 左右箭头，一天一翻</td><td>横向日期胶囊条（近 14 天）+ 点击标题开月历；胶囊 ≥ 46×58dp</td><td><span class="prio p0">P0</span></td></tr>
+            <tr><td>底部区域</td><td>常驻输入条（任务 56dp + 元信息行 + 提示行，约 130dp）</td><td>改为 FAB + 面板（自动聚焦键盘），底部只保留 64dp 导航（图标 24dp），列表可视高度 +45%</td><td><span class="prio p0">P0</span></td></tr>
+            <tr><td>新建任务</td><td>两条入口，输入框与面板能力割裂</td><td>统一为一张面板：标题 / 标签 chips / 优先级分段控件，同一处完成</td><td><span class="prio p0">P0</span></td></tr>
+            <tr><td>任务行字号</td><td>标题 12sp / 标签 10sp</td><td>标题 15sp（可两行）/ 标签 12sp / 元信息 12sp</td><td><span class="prio p0">P0</span></td></tr>
+            <tr><td>触控目标</td><td>箭头 24dp、更多 28dp</td><td>统一 ≥ 44dp（勾选圈 24dp 视觉 + 44dp 热区）</td><td><span class="prio p0">P0</span></td></tr>
+            <tr><td>优先级表达</td><td>左侧 3dp 纯色条</td><td>色点 + 文字「高/中/低」徽标，不靠颜色单独传意</td><td><span class="prio p1">P1</span></td></tr>
+            <tr><td>任务操作</td><td>藏在 ⋯ 面板，两层跳转</td><td>⋯ 面板内分组：改期/拉回今天在上一排，撤回/删除在第二排并加副标题说明</td><td><span class="prio p1">P1</span></td></tr>
+            <tr><td>顺延任务</td><td>与今日任务混排，只带一个「顺延 N 天」标签</td><td>独立「顺延自昨天」分组 + 左侧 3dp 主色描边，扫一眼就分清</td><td><span class="prio p1">P1</span></td></tr>
+            <tr><td>已完成任务</td><td>混在列表中，划掉但仍占位</td><td>折叠到底部「已完成 N」分组，可一键清除</td><td><span class="prio p1">P1</span></td></tr>
+            <tr><td>反馈提示</td><td>原生 Toast</td><td>Snackbar（带「撤销」），2.5s 自动消失，不遮挡底部导航</td><td><span class="prio p1">P1</span></td></tr>
+            <tr><td>随记输入</td><td>提示「Enter 保存 · Shift+Enter 换行」—— 手机没有 Shift 键</td><td>改为「保存」按钮 + 多行输入，提示文案改为「可多行，点保存」</td><td><span class="prio p1">P1</span></td></tr>
+            <tr><td>历史只读</td><td>底部一行小字「这一天是历史记录，只能查看」</td><td>顶部横幅 + 禁用勾选 + 隐藏 FAB + 灰化处理，状态一目了然</td><td><span class="prio p1">P1</span></td></tr>
+            <tr><td>长随记</td><td>按字数 70 判定是否可折叠</td><td>按实际行数判定（3 行截断 + 展开全文），中文标点更准</td><td><span class="prio p2">P2</span></td></tr>
+            <tr><td>搜索 / 筛选</td><td>无</td><td>顶部放大镜入口（占位，先接标题与标签的本地过滤）</td><td><span class="prio p2">P2</span></td></tr>
+            <tr><td>深色模式</td><td>强制 lightColorScheme</td><td>补 darkColorScheme，跟随系统</td><td><span class="prio p2">P2</span></td></tr>
+            <tr><td>动效</td><td>无</td><td>勾选回弹、按钮 0.95x 按下、面板 300ms 上滑，只动 transform/opacity</td><td><span class="prio p2">P2</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="doc-card">
+        <h2><span class="num">3</span>设计 Token</h2>
+        <p class="lead">沿用现有品牌蓝 #378ADD，重做语义色与字号刻度。</p>
+        <div class="token-grid">
+          <div class="token"><div class="sw" style="background:#378ADD"></div><div class="info"><b>Accent</b><span>#378ADD</span></div></div>
+          <div class="token"><div class="sw" style="background:#185FA5"></div><div class="info"><b>Accent Dark</b><span>#185FA5 · 文字用</span></div></div>
+          <div class="token"><div class="sw" style="background:#E6F1FB"></div><div class="info"><b>Accent Light</b><span>#E6F1FB</span></div></div>
+          <div class="token"><div class="sw" style="background:#1F1F1E"></div><div class="info"><b>Text 1</b><span>#1F1F1E · 16.1:1</span></div></div>
+          <div class="token"><div class="sw" style="background:#55544F"></div><div class="info"><b>Text 2</b><span>#55544F · 8.1:1</span></div></div>
+          <div class="token"><div class="sw" style="background:#75736C"></div><div class="info"><b>Text 3</b><span>#75736C · 4.9:1</span></div></div>
+          <div class="token"><div class="sw" style="background:#C93B3B"></div><div class="info"><b>高优先级</b><span>#C93B3B · 5.2:1</span></div></div>
+          <div class="token"><div class="sw" style="background:#9C5D00"></div><div class="info"><b>中优先级</b><span>#9C5D00 · 5.6:1</span></div></div>
+          <div class="token"><div class="sw" style="background:#ECEAE4"></div><div class="info"><b>Divider</b><span>#ECEAE4</span></div></div>
+          <div class="token"><div class="sw" style="background:#F2F0E9"></div><div class="info"><b>Chip</b><span>#F2F0E9</span></div></div>
+        </div>
+        <div style="height:14px"></div>
+        <div class="kv"><b>字号刻度</b><span>24 / 17 / 15 / 13 / 12 / 11 sp（最小 11sp 仅用于角标）</span></div>
+        <div class="kv"><b>间距刻度</b><span>4 / 8 / 12 / 16 / 20 / 24 dp</span></div>
+        <div class="kv"><b>圆角</b><span>6 / 8 / 12 / 16 / 22 dp</span></div>
+        <div class="kv"><b>触控</b><span>最小 44×44dp，可视可点区分离</span></div>
+        <div class="kv"><b>动效</b><span>按压 0.95x / 悬停 1.05x，200–300ms，仅 transform + opacity</span></div>
+      </div>
+
+      <div class="doc-card">
+        <h2><span class="num">4</span>无障碍检查</h2>
+        <p class="lead">WCAG 2.2 AA 逐项核对，新版全部通过。</p>
+        <ul class="checklist">
+          <li class="warn">正文对比度：现状 <code>TextMuted #B4B2A9</code> 对白底仅约 2.2:1，<b>不达标</b> → 新版 #75736C 达 4.9:1</li>
+          <li class="warn">色彩传意：现状优先级仅靠色条 → 新版「色点 + 文字」，不依赖颜色单独区分</li>
+          <li class="warn">触控目标：现状 24–28dp → 新版统一 ≥ 44dp</li>
+          <li>焦点顺序：日期条 → 进度 → 列表 → FAB → 底栏，阅读顺序与视觉顺序一致</li>
+          <li>点击区域与图标分离：勾选圈视觉 24dp，热区扩至 44dp</li>
+          <li>所有图标按钮带 <code>contentDescription</code>，装饰性图标置 null</li>
+          <li>状态不只靠颜色：完成 = 勾线 + 删除线 + 透明度三重提示</li>
+          <li>系统字号放大到 200% 时不裁切：行高用 sp，容器用 dp</li>
+          <li>深色模式：补 darkColorScheme，跟随系统切换（待 P2）</li>
+        </ul>
+      </div>
+
+      <div class="doc-card">
+        <h2><span class="num">5</span>落地节奏</h2>
+        <p class="lead">按投入产出排序，建议分三批落地。</p>
+        <table>
+          <thead><tr><th style="width:16%">批次</th><th style="width:34%">内容</th><th style="width:50%">改动范围</th></tr></thead>
+          <tbody>
+            <tr><td><span class="prio p0">P0</span> 第一批</td><td>字号放大、触控目标、日期胶囊条、FAB + 面板、底部导航</td><td>重写 <code>DayTodoApp.kt</code> 的 MainScreen / ComposerBar，新增 <code>DateStrip</code>、<code>AddTaskSheet</code>；ViewModel 增加 <code>pendingTags</code>、<code>addTask(title, tags, priority)</code> 重载</td></tr>
+            <tr><td><span class="prio p1">P1</span> 第二批</td><td>顺延分组、已完成折叠、Snackbar、优先级文字徽标、历史只读横幅、随记保存按钮</td><td>VM 增加 <code>clearCompleted()</code>、<code>undoLast()</code> 快照；Compose 侧加 <code>SnackbarHost</code>、分组列表</td></tr>
+            <tr><td><span class="prio p2">P2</span> 第三批</td><td>搜索、深色模式、动效、触觉反馈、清除已完成</td><td>新增 <code>darkColorScheme</code>、<code>SearchSheet</code>、<code>LocalHapticFeedback</code></td></tr>
+          </tbody>
+        </table>
+        <div class="kv" style="margin-top:12px"><b>数据层</b><span>本次全部改动不触碰 <code>Models.kt</code> / <code>Repository.kt</code>，JSON 格式与桌面版保持一致</span></div>
+        <div class="kv"><b>提醒机制</b><span><code>ReminderScheduler</code> 不变</span></div>
+      </div>
+
+    </aside>
+  </div>
+</div>
+
+<script>
+/* ===================== 假数据 ===================== */
+const TASKS = [
+  {id:1, title:'把移动端交互方案发给张伟', tags:['工作','评审'], prio:'high', done:false, carried:2},
+  {id:2, title:'整理 Q3 数据报表并同步给财务', tags:['数据'], prio:'mid', done:false, carried:2},
+  {id:3, title:'回复客户邮件', tags:['沟通'], prio:'low', done:false},
+  {id:4, title:'更新项目排期表', tags:['工作'], prio:'mid', done:false},
+  {id:5, title:'买猫粮', tags:['生活'], prio:'low', done:true},
+  {id:6, title:'晨跑 3 公里', tags:['健康'], prio:'low', done:true},
+  {id:7, title:'写周报', tags:['工作'], prio:'mid', done:true}
+];
+const NOTES = [
+  {id:1, time:'09:24', text:'产品评审三个结论：一、首页改成「任务 / 随记」双标签；二、顺延任务单独分组，不再和今天混在一起；三、底部常驻输入区换成 FAB + 面板，把屏幕高度还给列表。', refs:[{d:'11月18日', t:'移动端改版范围讨论'}]},
+  {id:2, time:'10:02', text:'记一下：明天要把 App 图标换成新的一套，冷淡蓝那版。', refs:[]},
+  {id:3, time:'21:40', text:'晚间复盘：今天把移动端第一版交互稿做完了，底部导航比顶部 Tab 更顺手。', refs:[]}
+];
+
+const ICON = {
+  more:'<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg>',
+  check:'<svg viewBox="0 0 24 24"><path d="M5 12.5 10 17.5 19 7"/></svg>',
+  cal:'<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  today:'<svg viewBox="0 0 24 24"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>',
+  pull:'<svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg>',
+  move:'<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>',
+  undo:'<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
+  trash:'<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  link:'<svg viewBox="0 0 24 24"><path d="M10 13a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 0 0-5.7-5.7L11 6.3"/><path d="M14 11a4 4 0 0 0-5.7 0L6 13.3a4 4 0 0 0 5.7 5.7L13 17.7"/></svg>',
+  edit:'<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/></svg>',
+  note:'<svg viewBox="0 0 24 24"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/></svg>',
+  list:'<svg viewBox="0 0 24 24"><path d="M4 7h10M4 12h10M4 17h7"/></svg>',
+  search:'<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
+};
+
+const PRIO = {high:['高','prio-high'], mid:['中','prio-mid'], low:['低','prio-low']};
+
+/* ===================== 状态 ===================== */
+const state = {
+  tab:'tasks',
+  dateIndex: 6,          // 胶囊条上的索引，6 = 今天
+  tasks: TASKS.map(t=>({...t})),
+  notes: NOTES.map(n=>({...n})),
+  sheet:null
+};
+
+/* ===================== 日期 ===================== */
+const WK = ['周日','周一','周二','周三','周四','周五','周六'];
+const today = new Date(2026, 10, 21); // 2026-11-21 周六
+function mkDates(){
+  const arr=[];
+  for(let i=-6;i<=7;i++){
+    const d=new Date(today); d.setDate(d.getDate()+i);
+    arr.push({d, i});
+  }
+  return arr;
+}
+const DATES = mkDates();
+function fmtDate(d){return (d.getMonth()+1)+'月'+d.getDate()+'日';}
+function isToday(d){return d.toDateString()===today.toDateString();}
+function isPast(d){return d < new Date(today.getFullYear(),today.getMonth(),today.getDate());}
+function selectedDateObj(){return DATES[state.dateIndex].d;}
+function selectedIsToday(){return isToday(selectedDateObj());}
+
+/* ===================== 渲染 ===================== */
+const $ = id=>document.getElementById(id);
+const el = (html)=>{const t=document.createElement('template');t.innerHTML=html.trim();return t.content.firstElementChild;};
+
+function renderStrip(){
+  const strip=$('dateStrip'); strip.innerHTML='';
+  DATES.forEach((o,idx)=>{
+    const b=el(`<button class="dchip ${idx===state.dateIndex?'is-sel':''} ${isToday(o.d)?'is-today':''} ${idx<6?'has':''}">
+      <span class="dw">${WK[o.d.getDay()].slice(1)}</span><span class="dd">${o.d.getDate()}</span></button>`);
+    b.onclick=()=>{state.dateIndex=idx;renderAll();};
+    strip.appendChild(b);
+  });
+  // 让选中项自动居中，避免被裁在边缘
+  requestAnimationFrame(()=>{
+    const target=strip.children[state.dateIndex];
+    if(target) strip.scrollLeft=target.offsetLeft-strip.clientWidth/2+target.offsetWidth/2;
+  });
+  const sel=DATES[state.dateIndex];
+  $('dMain').textContent=fmtDate(sel.d);
+  $('dWeek').textContent=WK[sel.d.getDay()];
+  const rel=isToday(sel.d)?'今天':(isPast(sel.d)?'历史':'计划');
+  const relEl=$('dRel'); relEl.textContent=rel; relEl.classList.toggle('readonly',isPast(sel.d));
+  $('todayBtn').style.display=isToday(sel.d)?'none':'inline';
+  document.body.classList.toggle('readonly', isPast(sel.d));
+}
+
+function taskRow(t){
+  const [pl,pc]=PRIO[t.prio];
+  const meta=[];
+  meta.push(`<span class="badge ${pc}"><span class="dot"></span>${pl}</span>`);
+  t.tags.forEach(tg=>meta.push(`<span class="chip">${tg}</span>`));
+  if(t.carried) meta.push(`<span class="badge badge-carry">顺延 ${t.carried} 天</span>`);
+  const ro = isPast(selectedDateObj());
+  return `<div class="task ${t.done?'done':''} ${t.carried?'carried':''}" data-id="${t.id}">
+    <button class="check ${t.done?'on':''}" ${ro?'disabled':''} aria-label="标记完成">${ICON.check}</button>
+    <div class="t-main">
+      <div class="t-title">${t.title}</div>
+      <div class="t-meta">${meta.join('')}</div>
+    </div>
+    <button class="more-btn" data-more="${t.id}" aria-label="更多操作">${ICON.more}</button>
+  </div>`;
+}
+
+function renderTasks(){
+  const box=$('taskList');
+  const list=state.tasks;
+  const open=list.filter(t=>!t.done);
+  const done=list.filter(t=>t.done);
+  const carried=open.filter(t=>t.carried);
+  const todayList=open.filter(t=>!t.carried);
+  let html='';
+  if(!list.length){
+    html=`<div class="empty"><div class="icon">${ICON.list}</div><h3>这一天还没有任务</h3><p>点右下角的 + 添加第一条</p></div>`;
+  }else{
+    if(carried.length){
+      html+=`<div class="sec"><div class="sec-t">顺延自更早 <span class="cnt">${carried.length}</span></div></div>`;
+      html+=carried.map(taskRow).join('');
+    }
+    if(todayList.length){
+      html+=`<div class="sec"><div class="sec-t">今天 <span class="cnt">${todayList.length}</span></div></div>`;
+      html+=todayList.map(taskRow).join('');
+    }
+    if(done.length){
+      html+=`<div class="sec"><div class="sec-t">已完成 <span class="cnt">${done.length}</span></div><button class="sec-act" id="clearDone">清除已完成</button></div>`;
+      html+=done.map(taskRow).join('');
+    }
+  }
+  box.innerHTML=html;
+  box.querySelectorAll('.check').forEach(c=>{
+    c.onclick=()=>{
+      const id=+c.closest('.task').dataset.id;
+      const t=state.tasks.find(x=>x.id===id);
+      t.done=!t.done;
+      const card=c.closest('.task'); card.classList.add('just-done');
+      setTimeout(()=>{renderAll();},180);
+      if(t.done) snack(`已完成「${t.title}」`,'撤销',()=>{t.done=false;renderAll();});
+    };
+  });
+  box.querySelectorAll('[data-more]').forEach(m=>{
+    m.onclick=()=>openTaskSheet(+m.dataset.more);
+  });
+  const cd=$('clearDone');
+  if(cd) cd.onclick=()=>{
+    const removed=state.tasks.filter(t=>t.done);
+    state.tasks=state.tasks.filter(t=>!t.done);
+    renderAll();
+    snack(`已清除 ${removed.length} 条已完成任务`,'撤销',()=>{state.tasks=state.tasks.concat(removed);renderAll();});
+  };
+  // 摘要
+  const total=list.length, d=list.filter(t=>t.done).length, c=list.filter(t=>t.carried&&!t.done).length;
+  $('sumTxt').textContent=`${d} / ${total} 完成 · ${c} 项顺延`;
+  $('sumProg').style.width=(total?Math.round(d/total*100):0)+'%';
+  $('sumMore').textContent=d? '清除已完成':'';
+  $('sumMore').style.cursor = d?'pointer':'default';
+}
+
+function renderNotes(){
+  const box=$('noteList');
+  if(!state.notes.length){
+    box.innerHTML=`<div class="empty"><div class="icon">${ICON.note}</div><h3>这一天还没有随记</h3><p>把此刻的想法随手记下来</p></div>`;
+    return;
+  }
+  let html='';
+  const rel=selectedIsToday()?'今天':(isPast(selectedDateObj())?'历史':'计划');
+  state.notes.forEach(n=>{
+    const long=n.text.length>58;
+    const refs=(n.refs||[]).map(r=>`<span class="ref">${ICON.link}<span>引用 ${r.d} · ${r.t}</span></span>`).join('');
+    html+=`<article class="note">
+      <div class="note-head">
+        <span class="note-time">${n.time}</span>
+        <span class="note-tag">${rel}</span>
+        <span style="flex:1"></span>
+        <button class="more-btn" data-nmore="${n.id}" aria-label="更多操作">${ICON.more}</button>
+      </div>
+      <div class="note-text ${long?'clamp':''}" data-ntext="${n.id}">${n.text}</div>
+      ${long?`<span class="note-more" data-fold="${n.id}">展开全文</span>`:''}
+      ${refs?`<div class="note-refs">${refs}</div>`:''}
+    </article>`;
+  });
+  box.innerHTML=html;
+  box.querySelectorAll('[data-fold]').forEach(f=>{
+    f.onclick=()=>{
+      const t=box.querySelector(`[data-ntext="${f.dataset.fold}"]`);
+      const on=t.classList.toggle('clamp');
+      f.textContent=on?'展开全文':'收起';
+    };
+  });
+  box.querySelectorAll('[data-nmore]').forEach(m=>{
+    m.onclick=()=>openNoteSheet(+m.dataset.nmore);
+  });
+  $('sumTxt').textContent=`${state.notes.length} 条随记 · 可引用更早的内容`;
+  $('sumProg').style.width='100%';
+  $('sumMore').textContent='';
+}
+
+function renderAll(){
+  renderStrip();
+  if(state.tab==='tasks') renderTasks();
+  else renderNotes();
+  $('taskList').style.display = state.tab==='tasks'?'block':'none';
+  $('noteList').style.display = state.tab==='notes'?'block':'none';
+  $('fab').classList.toggle('hide', state.tab==='settings' || isPast(selectedDateObj()));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('on', n.dataset.tab===state.tab));
+  $('sumMore').onclick=()=>{
+    if(state.tab!=='tasks') return;
+    const done=state.tasks.filter(t=>t.done);
+    if(!done.length) return;
+    state.tasks=state.tasks.filter(t=>!t.done);
+    renderAll();
+    snack(`已清除 ${done.length} 条已完成任务`,'撤销',()=>{state.tasks=state.tasks.concat(done);renderAll();});
+  };
+}
+
+/* ===================== Snackbar ===================== */
+let snackTimer=null;
+function snack(text, actLabel, onAct){
+  $('snackText').textContent=text;
+  const act=$('snackAct');
+  act.style.display=actLabel?'inline':'none';
+  act.textContent=actLabel||'';
+  act.onclick=()=>{ if(onAct) onAct(); hideSnack(); };
+  $('snackbar').classList.add('show');
+  clearTimeout(snackTimer);
+  snackTimer=setTimeout(hideSnack,2600);
+}
+function hideSnack(){$('snackbar').classList.remove('show');}
+
+/* ===================== 底部面板 ===================== */
+function openSheet(html, onMount){
+  const s=$('sheet'); s.innerHTML=html; s.classList.add('show'); $('overlay').classList.add('show');
+  state.sheet='open';
+  if(onMount) onMount(s);
+}
+function closeSheet(){
+  $('sheet').classList.remove('show'); $('overlay').classList.remove('show'); state.sheet=null;
+}
+$('overlay').onclick=closeSheet;
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeSheet(); });
+
+/* --- 任务操作面板 --- */
+function openTaskSheet(id){
+  const t=state.tasks.find(x=>x.id===id);
+  const past=isPast(selectedDateObj());
+  const future=t.carried?false:false;
+  const todayTask = selectedIsToday();
+  let rows='';
+  if(t.carried && todayTask){
+    rows+=actRow('pull','拉回今天','顺延项一键回到今天','var(--accent)',()=>{
+      t.carried=0; closeSheet(); renderAll(); snack('已拉回今天');
+    });
+  }
+  if(!past){
+    rows+=actRow('move','改期','选择新的日期','var(--mid)',()=>{ closeSheet(); setTimeout(()=>openDateSheet(t),260); });
+  }
+  if(todayTask){
+    rows+=actRow('undo','撤回','回填到编辑框，可再修改','var(--accent-dark)',()=>{
+      state.tasks=state.tasks.filter(x=>x.id!==id); closeSheet(); renderAll();
+      snack('已撤回，标题已回填到编辑框','撤销',()=>{state.tasks.push(t);renderAll();});
+    });
+    rows+=actRow('trash','删除','不可恢复','var(--high)',()=>{
+      state.tasks=state.tasks.filter(x=>x.id!==id); closeSheet(); renderAll();
+      snack(`已删除「${t.title}」`,'撤销',()=>{state.tasks.push(t);renderAll();});
+    },true);
+  }
+  if(past){
+    rows+=`<div style="padding:16px;color:var(--text-3);font-size:13px;line-height:1.7">历史记录为只读，无法修改或删除。<br>可在日历中切换到今天或未来日期。</div>`;
+  }
+  openSheet(`
+    <div class="grabber"></div>
+    <h2>任务操作</h2>
+    <div class="sub">${t.title}</div>
+    <div class="act-list">${rows}</div>
+    <button class="ghost-btn" style="margin-top:16px" onclick="closeSheet()">取消</button>
+  `, s=>{ bindActs(s); });
+}
+function actRow(icon,label,hint,color,onClick,danger){
+  const key='act'+(++ACT_SEQ);
+  ACTS[key]=onClick;
+  return `<button class="act-item ${danger?'danger':''}" data-act="${key}">
+    <span class="ai-ic" style="background:${danger?'var(--high-bg)':'var(--accent-light)'};color:${danger?'var(--high)':color}">${ICON[icon]}</span>
+    <span class="ai-t">${label}</span><span class="ai-h">${hint}</span>
+  </button>`;
+}
+const ACTS={};
+let ACT_SEQ=0;
+function bindActs(scope){
+  scope.querySelectorAll('[data-act]').forEach(b=>{
+    b.onclick=()=>{ const fn=ACTS[b.dataset.act]; if(fn) fn(); };
+  });
+}
+window.closeSheet=closeSheet;
+
+/* --- 随记操作面板 --- */
+function openNoteSheet(id){
+  const n=state.notes.find(x=>x.id===id);
+  const past=isPast(selectedDateObj());
+  let rows=actRow('link','引用','跳回今天并加入草稿','var(--accent)',()=>{
+    closeSheet(); snack('已引用到今天的草稿');
+  });
+  if(!past){
+    rows+=actRow('edit','编辑','在输入框里修改','var(--accent-dark)',()=>{ closeSheet(); openNoteEdit(n); });
+    rows+=actRow('trash','删除','不可恢复','var(--high)',()=>{
+      state.notes=state.notes.filter(x=>x.id!==id); closeSheet(); renderAll();
+      snack('已删除随记','撤销',()=>{state.notes.push(n);renderAll();});
+    },true);
+  }
+  openSheet(`
+    <div class="grabber"></div>
+    <h2>随记操作</h2>
+    <div class="sub">${n.time} · ${n.text.slice(0,24)}…</div>
+    <div class="act-list">${rows}</div>
+    <button class="ghost-btn" style="margin-top:16px" onclick="closeSheet()">取消</button>
+  `, s=>{ bindActs(s); });
+}
+
+/* --- 新建任务面板 --- */
+function openAddSheet(){
+  openSheet(`
+    <div class="grabber"></div>
+    <h2>新建任务</h2>
+    <div class="sub">${fmtDate(selectedDateObj())} · ${selectedIsToday()?'今天':(isPast(selectedDateObj())?'历史（只读）':'计划')}</div>
+    <textarea class="text-field" id="ntTitle" placeholder="要做什么？" rows="2"></textarea>
+    <div class="field-label">标签</div>
+    <div class="tagbox" id="ntTags"></div>
+    <div class="tag-row">
+      <input class="tag-field" id="ntTagInput" placeholder="输入标签后回车，最多 4 个">
+      <button class="tag-add" id="ntTagAdd">添加</button>
+    </div>
+    <div class="field-label">优先级</div>
+    <div class="seg" id="ntPrio">
+      <button data-p="high"><span class="dot" style="background:var(--high)"></span>高</button>
+      <button data-p="mid" class="on"><span class="dot" style="background:var(--mid)"></span>中</button>
+      <button data-p="low"><span class="dot" style="background:var(--low)"></span>低</button>
+    </div>
+    <div class="sheet-actions">
+      <button class="ghost-btn" style="flex:1" onclick="closeSheet()">取消</button>
+      <button class="primary-btn" style="flex:2" id="ntSave">保存任务</button>
+    </div>
+  `, s=>{
+    s.querySelectorAll('#ntPrio button').forEach(b=>{
+      b.onclick=()=>{ s.querySelectorAll('#ntPrio button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); };
+    });
+    const tagInput=s.querySelector('#ntTagInput');
+    const commitTag=()=>{
+      const v=tagInput.value.trim();
+      if(!v) return;
+      addTagChip(s.querySelector('#ntTags'), v);
+      tagInput.value='';
+    };
+    s.querySelector('#ntTagAdd').onclick=commitTag;
+    tagInput.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); commitTag(); } };
+    s.querySelector('#ntSave').onclick=()=>{
+      const title=s.querySelector('#ntTitle').value.trim();
+      if(!title){ s.querySelector('#ntTitle').focus(); snack('先写点内容'); return; }
+      const prio=s.querySelector('#ntPrio .on').dataset.p;
+      const tags=[...s.querySelectorAll('#ntTags .chip:not(.add)')].map(c=>c.dataset.tag);
+      state.tasks.unshift({id:Date.now(),title,tags,prio,done:false,carried:0});
+      closeSheet(); renderAll(); snack('已添加任务');
+    };
+    setTimeout(()=>s.querySelector('#ntTitle').focus(),320);
+  });
+}
+function addTagChip(box,v){
+  if(box.querySelectorAll('.chip:not(.add)').length>=4){ snack('最多 4 个标签'); return; }
+  const c=document.createElement('span'); c.className='chip'; c.dataset.tag=v;
+  c.appendChild(document.createTextNode(v));
+  const x=document.createElement('span'); x.className='x'; x.textContent='×';
+  x.onclick=(e)=>{ e.stopPropagation(); c.remove(); };
+  c.appendChild(x);
+  box.insertBefore(c, box.querySelector('.add'));
+}
+
+/* --- 新建随记 --- */
+function openNoteSheetNew(){
+  openSheet(`
+    <div class="grabber"></div>
+    <h2>新建随记</h2>
+    <div class="sub">${fmtDate(selectedDateObj())} · 可多行，点保存</div>
+    <textarea class="text-field" id="nnText" placeholder="随手记下现在的想法…" rows="5"></textarea>
+    <div class="sheet-actions">
+      <button class="ghost-btn" style="flex:1" onclick="closeSheet()">取消</button>
+      <button class="primary-btn" style="flex:2" id="nnSave">保存</button>
+    </div>
+  `, s=>{
+    s.querySelector('#nnSave').onclick=()=>{
+      const v=s.querySelector('#nnText').value.trim();
+      if(!v){ s.querySelector('#nnText').focus(); snack('先写点内容'); return; }
+      const now=new Date();
+      state.notes.unshift({id:Date.now(),time:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),text:v,refs:[]});
+      closeSheet(); renderAll(); snack('已保存随记');
+    };
+    setTimeout(()=>s.querySelector('#nnText').focus(),320);
+  });
+}
+function openNoteEdit(n){
+  openSheet(`
+    <div class="grabber"></div>
+    <h2>编辑随记</h2>
+    <div class="sub">${n.time}</div>
+    <textarea class="text-field" id="nnText" rows="6"></textarea>
+    <div class="sheet-actions">
+      <button class="ghost-btn" style="flex:1" onclick="closeSheet()">取消</button>
+      <button class="primary-btn" style="flex:2" id="nnSave">保存修改</button>
+    </div>
+  `, s=>{
+    s.querySelector('#nnText').value=n.text;
+    s.querySelector('#nnSave').onclick=()=>{
+      n.text=s.querySelector('#nnText').value.trim()||n.text;
+      closeSheet(); renderAll(); snack('已更新');
+    };
+    setTimeout(()=>s.querySelector('#nnText').focus(),320);
+  });
+}
+
+/* --- 日历 --- */
+function nearestIndex(dateObj){
+  let best=0, bestDiff=Infinity;
+  DATES.forEach((o,i)=>{
+    const diff=Math.abs(o.d.getTime()-dateObj.getTime());
+    if(diff<bestDiff){bestDiff=diff;best=i;}
+  });
+  return best;
+}
+function openDateSheet(task){
+  const sel=selectedDateObj();
+  let view=new Date(sel.getFullYear(), sel.getMonth(), 1);
+  const s=$('sheet');
+
+  function build(){
+    const first=new Date(view.getFullYear(), view.getMonth(), 1);
+    const lead=(first.getDay()+6)%7;
+    const days=new Date(view.getFullYear(), view.getMonth()+1, 0).getDate();
+    let cells='';
+    for(let i=0;i<lead;i++) cells+=`<div class="cal-cell mute"></div>`;
+    for(let d=1;d<=days;d++){
+      const dt=new Date(view.getFullYear(), view.getMonth(), d);
+      const issel=dt.toDateString()===sel.toDateString();
+      const istoday=dt.toDateString()===today.toDateString();
+      const past=dt<new Date(today.getFullYear(),today.getMonth(),today.getDate());
+      cells+=`<button class="cal-cell ${issel?'sel':''}" data-d="${d}" ${past?'style="opacity:.42"':''}>
+        <span>${d}</span>
+        <span class="dots">${istoday?'<i></i>':''}${(d%3===0)?'<i class="n"></i>':''}</span>
+      </button>`;
+    }
+    s.innerHTML=`
+      <div class="grabber"></div>
+      <h2>${task?'改期':'选择日期'}</h2>
+      <div class="sub">${task? task.title : '点一天即可切换'}</div>
+      <div class="cal-head">
+        <button class="btn-icon" id="calPrev"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="m">${view.getFullYear()} 年 ${view.getMonth()+1} 月</div>
+        <button class="btn-icon" id="calNext"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+      </div>
+      <div class="cal-wk"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+      <div class="cal-grid">${cells}</div>
+      <div class="cal-legend"><span><i></i>有任务</span><span><i class="n"></i>有随记</span></div>
+      <div class="sheet-actions">
+        <button class="ghost-btn" style="flex:1" id="calToday">回到今天</button>
+        <button class="ghost-btn" style="flex:1" id="calCancel">取消</button>
+      </div>`;
+    bind();
+  }
+
+  function bind(){
+    s.querySelector('#calPrev').onclick=()=>{view=new Date(view.getFullYear(),view.getMonth()-1,1);build();};
+    s.querySelector('#calNext').onclick=()=>{view=new Date(view.getFullYear(),view.getMonth()+1,1);build();};
+    s.querySelector('#calToday').onclick=()=>{
+      state.dateIndex=6; closeSheet(); renderAll(); snack('已回到今天');
+    };
+    s.querySelector('#calCancel').onclick=closeSheet;
+    s.querySelectorAll('.cal-cell[data-d]').forEach(c=>{
+      c.onclick=()=>{
+        const dt=new Date(view.getFullYear(), view.getMonth(), +c.dataset.d);
+        if(task){
+          task.carried=0;
+          task.rescheduledTo=fmtDate(dt);
+          closeSheet(); renderAll();
+          snack(`已改期到 ${fmtDate(dt)}`);
+        }else{
+          state.dateIndex=nearestIndex(dt);
+          closeSheet(); renderAll();
+        }
+      };
+    });
+  }
+
+  s.classList.add('show');
+  $('overlay').classList.add('show');
+  state.sheet='open';
+  build();
+}
+
+/* ===================== 事件绑定 ===================== */
+document.querySelectorAll('.nav-item').forEach(n=>{
+  n.onclick=()=>{
+    const tab=n.dataset.tab;
+    state.tab=tab;
+    if(tab==='settings'){
+      $('mainView').style.display='none';
+      $('settingsView').classList.add('on');
+      $('bottomNav').style.display='none';
+      $('fab').classList.add('hide');
+    }else{
+      $('mainView').style.display='flex';
+      $('settingsView').classList.remove('on');
+      $('bottomNav').style.display='flex';
+    }
+    renderAll();
+  };
+});
+$('backFromSettings').onclick=()=>{
+  $('mainView').style.display='flex';
+  $('settingsView').classList.remove('on');
+  $('bottomNav').style.display='flex';
+  state.tab='tasks'; renderAll();
+};
+$('fab').onclick=()=>{ state.tab==='notes'?openNoteSheetNew():openAddSheet(); };
+$('calBtn').onclick=()=>openDateSheet(null);
+$('dateTitleBtn').onclick=()=>openDateSheet(null);
+$('todayBtn').onclick=(e)=>{e.stopPropagation();state.dateIndex=6;renderAll();};
+$('searchBtn').onclick=()=>snack('搜索：按标题与标签过滤（P2 待实现）');
+document.querySelectorAll('.switch').forEach(s=>{
+  s.onclick=()=>s.classList.toggle('on');
+});
+
+/* 启动 */
+renderAll();
+</script>
+</body>
+</html>
