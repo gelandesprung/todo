@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using DayTodo.ViewModels;
 
@@ -51,6 +52,51 @@ public partial class MainWindow : Window
     /// <summary>Opens the settings dialog, where every other operation lives.</summary>
     private void Settings_Click(object sender, RoutedEventArgs e) =>
         (System.Windows.Application.Current as App)?.OpenSettings();
+
+    // ---- 任务全文 ----
+
+    /// <summary>
+    /// The title block is a button for every row, but only a row whose title was measured
+    /// as trimmed opens the card. A short task therefore stays completely inert on click,
+    /// which is why the check lives here rather than in a command's CanExecute.
+    /// </summary>
+    private void TaskBody_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement element ||
+            element.DataContext is not TaskRowViewModel row) return;
+        if (DataContext is not MainViewModel vm || !row.IsTruncated) return;
+
+        vm.OpenTaskDetail(row);
+        if (!vm.IsDetailOpen) return;
+
+        DetailLayer.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(120)));
+
+        // Focus lands after the layer has been laid out, so the caret is inside the card
+        // from the first key press (Esc, Tab, Ctrl+C).
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (vm.IsDetailOpen) DetailTitle.Focus();
+        }), DispatcherPriority.Input);
+    }
+
+    private void DetailBackdrop_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        (DataContext as MainViewModel)?.CloseTaskDetail();
+    }
+
+    private void DetailClose_Click(object sender, RoutedEventArgs e) =>
+        (DataContext as MainViewModel)?.CloseTaskDetail();
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        if (DataContext is not MainViewModel vm || !vm.IsDetailOpen) return;
+
+        vm.CloseTaskDetail();
+        e.Handled = true;
+    }
 
     /// <summary>Lets the user pick today or any future day. Returns null when cancelled.</summary>
     public DateTime? PickMoveDate(DateTime earliest)
@@ -177,7 +223,12 @@ public partial class MainWindow : Window
 
     private void Maximize_Click(object sender, RoutedEventArgs e) => ToggleMaximize();
 
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    // Hiding to the tray must not leave the card open for the next time the window appears.
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        (DataContext as MainViewModel)?.CloseTaskDetail();
+        Close();
+    }
 
     // The whole bordered area acts as the input box: clicking padding focuses the TextBox.
     private void InputArea_MouseDown(object sender, MouseButtonEventArgs e)

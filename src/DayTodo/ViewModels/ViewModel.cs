@@ -78,6 +78,9 @@ public sealed class MainViewModel : ObservableObject
     private NoteItem? _editingNote;
     private int _todayNoteCount;
 
+    /// <summary>The task whose "read in full" card is open, or null when it is closed.</summary>
+    private TaskRowViewModel? _detailRow;
+
     /// <summary>Quotes waiting to be attached to the note being written or edited.</summary>
     private readonly List<NoteReference> _pendingQuotes = new();
 
@@ -315,6 +318,7 @@ public sealed class MainViewModel : ObservableObject
     {
         if (_showNotes == notes) return;
         _showNotes = notes;
+        CloseTaskDetail();
         OnPropertyChanged(nameof(IsTasksTab));
         OnPropertyChanged(nameof(IsNotesTab));
         OnPropertyChanged(nameof(ShowTaskProgress));
@@ -621,6 +625,34 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>An MCP tool changed the shared data; persist and refresh like a user action.</summary>
     public void CommitExternalChange() => Commit();
 
+    // ---- 任务全文 ----
+
+    /// <summary>Non-null while the full-text card is open. At most one at a time.</summary>
+    public TaskRowViewModel? DetailRow => _detailRow;
+
+    public bool IsDetailOpen => _detailRow != null;
+
+    /// <summary>
+    /// Opens the read-in-full card. Only rows whose title was actually trimmed qualify:
+    /// for a short title the card would just repeat what the row already shows.
+    /// </summary>
+    public void OpenTaskDetail(TaskRowViewModel? row)
+    {
+        if (row == null || !row.IsTruncated) return;
+        if (ReferenceEquals(_detailRow, row)) return;
+        _detailRow = row;
+        OnPropertyChanged(nameof(DetailRow));
+        OnPropertyChanged(nameof(IsDetailOpen));
+    }
+
+    public void CloseTaskDetail()
+    {
+        if (_detailRow == null) return;
+        _detailRow = null;
+        OnPropertyChanged(nameof(DetailRow));
+        OnPropertyChanged(nameof(IsDetailOpen));
+    }
+
     /// <summary>Called when the system date rolls over while the app is running.</summary>
     public void OnNewDay()
     {
@@ -639,6 +671,10 @@ public sealed class MainViewModel : ObservableObject
 
     private void Rebuild()
     {
+        // The card points at one specific row instance; a rebuild replaces every row, so
+        // close it instead of leaving it on a task that may have just moved or vanished.
+        CloseTaskDetail();
+
         var sel = Sel();
         var today = DateUtil.Today();
         var editable = CanEdit;
@@ -757,6 +793,9 @@ public sealed class TaskRowViewModel : ObservableObject
     private readonly Action<TaskRowViewModel> _move;
     private readonly Action<TaskRowViewModel> _bringToToday;
 
+    /// <summary>Set by the view once it has measured the title against the row width.</summary>
+    private bool _isTruncated;
+
     public TaskRowViewModel(TaskItem model, string sel, string today, bool canEdit,
         Action<TaskRowViewModel> toggle, Action<TaskRowViewModel> delete,
         Action<TaskRowViewModel> recall,
@@ -804,6 +843,59 @@ public sealed class TaskRowViewModel : ObservableObject
         0 => CLow,
         _ => CNormal
     };
+
+    /// <summary>Pill colours for the full-text card, which spells the level out in words.</summary>
+    public Brush PriorityBack => IsDone ? CGrayBack : Model.Priority switch
+    {
+        2 => CRedBack,
+        0 => CGrayBack,
+        _ => CAmberBack
+    };
+
+    public Brush PriorityFore => IsDone ? CGrayText : Model.Priority switch
+    {
+        2 => CRedText,
+        0 => CGrayText,
+        _ => CAmberText
+    };
+
+    /// <summary>Whether the rendered title had to be cut off. Drives the click affordance.</summary>
+    public bool IsTruncated => _isTruncated;
+
+    /// <summary>Called from the view's measurement pass; never set from the data layer.</summary>
+    internal void SetTruncated(bool value)
+    {
+        if (_isTruncated == value) return;
+        _isTruncated = value;
+        OnPropertyChanged(nameof(IsTruncated));
+    }
+
+    /// <summary>
+    /// Where this task came from and where it sits now: the one part of a task the row
+    /// itself cannot show for lack of space.
+    /// </summary>
+    public string DetailMetaText
+    {
+        get
+        {
+            var parts = new List<string> { "创建于 " + MonthDay(Model.DateOrigin) };
+
+            if (Model.PostponeDays > 0) parts.Add("顺延 " + Model.PostponeDays + " 天");
+
+            if (Model.DateCompleted != null)
+                parts.Add("于 " + MonthDay(Model.DateCompleted) + " 完成");
+            else if (Model.DateCurrent != Model.DateOrigin)
+                parts.Add("现排在 " + MonthDay(Model.DateCurrent));
+
+            return string.Join(" · ", parts);
+        }
+    }
+
+    private static string MonthDay(string date)
+    {
+        var d = DateOnly.ParseExact(date, DateUtil.Format, CultureInfo.InvariantCulture);
+        return d.Month + "/" + d.Day;
+    }
 
     public Brush CheckFill => IsDone ? CAccent : Brushes.Transparent;
 

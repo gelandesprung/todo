@@ -342,6 +342,71 @@ public partial class App : Application, ISettingsHost
                     longRow?.ToggleFoldCommand.Execute(null);
                     log.AppendLine("LongNoteCollapsedAgain=" + (longRow?.IsCollapsed == true));
                     _vm.SelectedDate = DateTime.Today;
+                    _window.UpdateLayout();
+
+                    // 任务全文：只有标题真被截断的行才可点开，卡片里是完整原文。
+                    box.Text = "把上周三家供应商的报价单全部核对一遍，重点看交期和付款条件有没有变化，"
+                             + "另外把差异整理成一页结论发给采购";
+                    enterKey();
+                    _window.UpdateLayout();
+                    _window.UpdateLayout();
+
+                    var longTask = _vm.Rows.FirstOrDefault(r => r.Title.StartsWith("把上周三家"));
+                    var shortTask = _vm.Rows.FirstOrDefault(r => r.Title == "自检任务二改");
+                    log.AppendLine("LongTaskRowFound=" + (longTask != null));
+                    log.AppendLine("LongTaskTruncated=" + (longTask?.IsTruncated == true));
+                    log.AppendLine("ShortTaskNotTruncated=" + (shortTask?.IsTruncated == false));
+
+                    if (longTask != null)
+                    {
+                        // Back to the task tab: the card only ever opens from there.
+                        _vm.ShowTasksCommand.Execute(null);
+                        _window.UpdateLayout();
+                        SaveShot(_window, "task-list");
+
+                        // Drive the real path: the row's title block is a Button, so raise
+                        // its click instead of calling the view model directly.
+                        var taskList = _window.FindName("TaskList") as System.Windows.Controls.ListBox;
+                        var taskIndex = _vm.Rows.IndexOf(longTask);
+                        var taskItem = taskIndex < 0 ? null : taskList?.ItemContainerGenerator
+                            .ContainerFromIndex(taskIndex) as System.Windows.Controls.ListBoxItem;
+                        var bodyButton = taskItem == null ? null
+                            : FindVisual<System.Windows.Controls.Button>(taskItem,
+                                b => ReferenceEquals(b.Style, _window.FindResource("TaskBodyButton")));
+                        log.AppendLine("TaskBodyButtonFound=" + (bodyButton != null));
+
+                        bodyButton?.RaiseEvent(new RoutedEventArgs(
+                            System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                        _window.UpdateLayout();
+                        SaveShot(_window, "task-detail", 2.0);
+
+                        var detailLayer = _window.FindName("DetailLayer") as System.Windows.FrameworkElement;
+                        var detailTitle = _window.FindName("DetailTitle") as System.Windows.Controls.TextBox;
+                        log.AppendLine("DetailOpenByClick=" + _vm.IsDetailOpen);
+                        log.AppendLine("DetailRowIsLongTask=" + ReferenceEquals(_vm.DetailRow, longTask));
+                        log.AppendLine("DetailLayerVisible=" +
+                            (detailLayer?.Visibility == Visibility.Visible));
+                        log.AppendLine("DetailTitleFull=" + (detailTitle?.Text == longTask.Title));
+                        log.AppendLine("DetailMetaText=" + longTask.DetailMetaText);
+
+                        // Esc closes the card; the handler lives on the window so it works
+                        // wherever focus happens to be inside the card.
+                        var esc = new System.Windows.Input.KeyEventArgs(
+                            System.Windows.Input.Keyboard.PrimaryDevice,
+                            System.Windows.PresentationSource.FromVisual(_window),
+                            Environment.TickCount, System.Windows.Input.Key.Escape)
+                        { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
+                        _window.RaiseEvent(esc);
+                        log.AppendLine("DetailEscClosed=" + !_vm.IsDetailOpen);
+                        log.AppendLine("DetailEscHandled=" + esc.Handled);
+
+                        // A title that fits must not open the card, even if requested directly.
+                        if (shortTask != null)
+                        {
+                            _vm.OpenTaskDetail(shortTask);
+                            log.AppendLine("ShortTaskCardRefused=" + !_vm.IsDetailOpen);
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -488,6 +553,40 @@ public partial class App : Application, ISettingsHost
 
         return FindVisual<System.Windows.Controls.Button>(container,
             b => (b.Content as string) == "撤回");
+    }
+
+    /// <summary>
+    /// Writes the current window pixels into DAYTODO_SHOT_DIR, when that variable is set.
+    /// Used to eyeball layout during development; without the variable it does nothing.
+    /// </summary>
+    private static void SaveShot(Window window, string name, double scale = 1.0)
+    {
+        var dir = Environment.GetEnvironmentVariable("DAYTODO_SHOT_DIR");
+        if (string.IsNullOrWhiteSpace(dir)) return;
+
+        try
+        {
+            System.IO.Directory.CreateDirectory(dir);
+            var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(window);
+            var factor = dpi.DpiScaleX * scale;
+            var width = (int)Math.Ceiling(window.ActualWidth * factor);
+            var height = (int)Math.Ceiling(window.ActualHeight * factor);
+            if (width <= 0 || height <= 0) return;
+
+            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                width, height, 96 * factor, 96 * factor,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            bitmap.Render(window);
+
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+            using var stream = System.IO.File.Create(System.IO.Path.Combine(dir, name + ".png"));
+            encoder.Save(stream);
+        }
+        catch (Exception)
+        {
+            // A screenshot is a development convenience; never let it fail the run.
+        }
     }
 
     /// <summary>Depth-first search of the visual tree for the first matching element.</summary>
