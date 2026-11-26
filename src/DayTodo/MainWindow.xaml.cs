@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
+using System.Windows.Data;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -24,6 +28,8 @@ public partial class MainWindow : Window
         {
             var app = System.Windows.Application.Current as App;
             SyncMcpState(app?.McpSettings.Enabled ?? false, app?.McpStatusText ?? "已停止");
+            var vm = DataContext as MainViewModel;
+            if (vm != null) vm.SearchHitOpened += OnSearchHitOpened;
         };
 
         _dateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
@@ -91,11 +97,139 @@ public partial class MainWindow : Window
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Escape) return;
-        if (DataContext is not MainViewModel vm || !vm.IsDetailOpen) return;
+        if (DataContext is not MainViewModel vm) return;
+
+        // Ctrl+F works from anywhere, including the multi-line note editor.
+        if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            vm.OpenSearch();
+            FocusSearchBox();
+            e.Handled = true;
+            return;
+        }
+
+        if (vm.IsSearching)
+        {
+            if (e.Key == Key.Escape)
+            {
+                vm.CloseSearch();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Down || e.Key == Key.Up)
+            {
+                var hit = vm.MoveSearchSelection(e.Key == Key.Down ? 1 : -1);
+                if (hit != null) ScrollToSearchHit(hit);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Enter && vm.CurrentSearchHit != null)
+            {
+                vm.OpenSearchHitCommand.Execute(vm.CurrentSearchHit);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (e.Key != Key.Escape || !vm.IsDetailOpen) return;
 
         vm.CloseTaskDetail();
         e.Handled = true;
+    }
+
+    // ---- 搜索 ----
+
+    /// <summary>Focusing the box is the entry point; Ctrl+F uses the same path.</summary>
+    private void SearchBox_GotFocus(object sender, RoutedEventArgs e) =>
+        (DataContext as MainViewModel)?.OpenSearch();
+
+    public void FocusSearchBox()
+    {
+        if (!IsVisible) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!IsVisible) return;
+            SearchBox.Focus();
+            SearchBox.SelectAll();
+        }), DispatcherPriority.Input);
+    }
+
+    /// <summary>Clicking the text jumps just like the 跳转 button; headers have no handler.</summary>
+    private void SearchHit_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement element || element.DataContext is not SearchHit hit) return;
+        (DataContext as MainViewModel)?.OpenSearchHitCommand.Execute(hit);
+        e.Handled = true;
+    }
+
+    private void ScrollToSearchHit(SearchHit hit)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!IsVisible) return;
+            var list = SearchList;
+            var index = 0;
+            for (var i = 0; i < SearchList.Items.Count; i++)
+                if (ReferenceEquals(SearchList.Items[i], hit)) { index = i; break; }
+            list.ScrollIntoView(list.Items[index]);
+        }), DispatcherPriority.Input);
+    }
+
+    private void OnSearchHitOpened(SearchHit hit)
+    {
+        if (!IsVisible) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!IsVisible) return;
+            UpdateLayout();
+
+            if (DataContext is not MainViewModel vm) return;
+            var index = -1;
+            if (hit.IsTask)
+            {
+                for (var i = 0; i < vm.Rows.Count; i++)
+                    if (vm.Rows[i].Model.Id == hit.Id) { index = i; break; }
+            }
+            else
+            {
+                for (var i = 0; i < vm.Notes.Count; i++)
+                    if (vm.Notes[i].Model.Id == hit.Id) { index = i; break; }
+            }
+            if (index < 0) return;
+
+            var list = hit.IsTask ? TaskList : NoteList;
+            list.ScrollIntoView(list.Items[index]);
+            var item = list.ItemContainerGenerator.ContainerFromIndex(index) as FrameworkElement;
+            if (item == null) return;
+            var card = FindVisual<Border>(item, b => b.Name == "RowCard");
+            if (card == null) return;
+
+            var original = card.Background;
+            card.Background = new SolidColorBrush(Color.FromRgb(230, 241, 251));
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1100) };
+            EventHandler? restore = null;
+            restore = (_, _) =>
+            {
+                card.Background = original;
+                timer.Stop();
+                timer.Tick -= restore;
+            };
+            timer.Tick += restore;
+            timer.Start();
+        }), DispatcherPriority.Input);
+    }
+
+    private static T? FindVisual<T>(DependencyObject root, Predicate<T> match) where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T typed && match(typed)) return typed;
+            var nested = FindVisual(child, match);
+            if (nested != null) return nested;
+        }
+        return null;
     }
 
     /// <summary>Lets the user pick today or any future day. Returns null when cancelled.</summary>
@@ -268,8 +402,182 @@ public partial class MainWindow : Window
         if (!NoteBox.IsKeyboardFocusWithin) NoteBox.Focus();
     }
 
+    // ---- 随记里的 @ 引用 ----
+
+    /// <summary>Rows currently offered by the popup, in display order.</summary>
+    private List<NoteMentionItem> _mentionItems = new();
+
+    /// <summary>Index of the '@' that opened the popup.</summary>
+    private int _mentionStart = -1;
+
+    /// <summary>Set while the popup itself rewrites the text box, so it does not reopen.</summary>
+    private bool _mentionSuppress;
+
+    /// <summary>
+    /// The popup lives where the caret is, and the caret is only visible here. Every text
+    /// change therefore re-reads the token before the caret: "@" plus anything typed after
+    /// it, up to a space.
+    /// </summary>
+    private void NoteBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateMentionPopup();
+
+    private void UpdateMentionPopup()
+    {
+        if (_mentionSuppress || DataContext is not MainViewModel vm)
+        {
+            CloseMention();
+            return;
+        }
+
+        if (!TryReadMentionQuery(out var start, out var query))
+        {
+            CloseMention();
+            return;
+        }
+
+        var items = vm.FindMentionCandidates(query);
+        if (items.Count == 0)
+        {
+            CloseMention();
+            return;
+        }
+
+        _mentionStart = start;
+        _mentionItems = items.ToList();
+        MentionList.ItemsSource = _mentionItems;
+        MentionList.SelectedIndex = 0;
+        // Narrower than the editor: eight short rows do not need 600px of width, and a
+        // tighter panel reads as a picker rather than as a second text box.
+        MentionPanel.Width = Math.Clamp(NoteBox.ActualWidth * 0.8, 300, 420);
+        MentionPopup.IsOpen = true;
+    }
+
+    /// <summary>
+    /// True when the caret sits in an unfinished @token: the character before '@' is a
+    /// boundary, and nothing between '@' and the caret is whitespace or another '@'.
+    /// </summary>
+    private bool TryReadMentionQuery(out int start, out string query)
+    {
+        start = -1;
+        query = string.Empty;
+
+        var text = NoteBox.Text ?? string.Empty;
+        var caret = Math.Min(NoteBox.CaretIndex, text.Length);
+        if (caret <= 0 || caret > text.Length) return false;
+
+        var at = text.LastIndexOf('@', caret - 1);
+        if (at < 0) return false;
+
+        if (at > 0)
+        {
+            var before = text[at - 1];
+            // "a@b.com" is not a mention: an @token only starts after a boundary.
+            if (!char.IsWhiteSpace(before) && ",，。；;：:、）)】]".IndexOf(before) < 0) return false;
+        }
+
+        var token = text.Substring(at + 1, caret - at - 1);
+        if (token.Length > 24) return false;
+        if (token.Any(ch => char.IsWhiteSpace(ch) || ch == '@')) return false;
+
+        start = at;
+        query = token;
+        return true;
+    }
+
+    private void CloseMention()
+    {
+        if (MentionPopup.IsOpen) MentionPopup.IsOpen = false;
+        _mentionItems.Clear();
+        MentionList.ItemsSource = null;
+        _mentionStart = -1;
+    }
+
+    /// <summary>Replaces the typed @token with "@标题 " and remembers the link.</summary>
+    private void CommitMention()
+    {
+        if (!MentionPopup.IsOpen) return;
+
+        var index = MentionList.SelectedIndex;
+        if (index < 0 || index >= _mentionItems.Count || _mentionStart < 0)
+        {
+            CloseMention();
+            return;
+        }
+
+        var item = _mentionItems[index];
+        var text = NoteBox.Text ?? string.Empty;
+        var caret = Math.Min(NoteBox.CaretIndex, text.Length);
+        var start = Math.Min(_mentionStart, caret);
+        var insert = "@" + item.Title + " ";
+
+        // Rewriting the text raises TextChanged synchronously, which closes the popup and
+        // resets the token index: the caret has to be placed from a captured value.
+        _mentionSuppress = true;
+        NoteBox.Text = text.Remove(start, caret - start).Insert(start, insert);
+        NoteBox.CaretIndex = start + insert.Length;
+        _mentionSuppress = false;
+
+        CloseMention();
+        (DataContext as MainViewModel)?.AddTaskRef(item);
+        NoteBox.Focus();
+    }
+
+    private void MoveMention(int delta)
+    {
+        if (_mentionItems.Count == 0) return;
+        var index = Math.Clamp(MentionList.SelectedIndex + delta, 0, _mentionItems.Count - 1);
+        MentionList.SelectedIndex = index;
+        MentionList.ScrollIntoView(MentionList.SelectedItem);
+    }
+
+    private void MentionList_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject source &&
+            ItemsControl.ContainerFromElement(MentionList, source) is ListBoxItem container)
+        {
+            MentionList.SelectedItem = container.DataContext;
+        }
+
+        e.Handled = true;
+        CommitMention();
+    }
+
+    // Clicking another control moves the focus out of the text box; the popup must not
+    // linger over the window after that.
+    private void NoteBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (NoteBox.IsKeyboardFocusWithin || MentionPopup.IsKeyboardFocusWithin) return;
+            CloseMention();
+        }), DispatcherPriority.Input);
+
+    private void NoteBox_PreviewMouseDown(object sender, MouseButtonEventArgs e) => CloseMention();
+
     private void NoteBox_KeyDown(object sender, KeyEventArgs e)
     {
+        if (MentionPopup.IsOpen)
+        {
+            switch (e.Key)
+            {
+                case Key.Down:
+                    MoveMention(1);
+                    e.Handled = true;
+                    return;
+                case Key.Up:
+                    MoveMention(-1);
+                    e.Handled = true;
+                    return;
+                case Key.Enter:
+                case Key.Tab:
+                    CommitMention();
+                    e.Handled = true;
+                    return;
+                case Key.Escape:
+                    CloseMention();
+                    e.Handled = true;
+                    return;
+            }
+        }
+
         if (e.Key != Key.Enter || Keyboard.Modifiers == ModifierKeys.Shift) return;
         if (DataContext is MainViewModel vm) vm.SaveNoteCommand.Execute(null);
         e.Handled = true;
@@ -309,5 +617,97 @@ public partial class MainWindow : Window
             return;
         }
         base.OnClosing(e);
+    }
+}
+
+/// <summary>Shows the placeholder only while the search box is empty.</summary>
+public sealed class EmptyTextToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter,
+        System.Globalization.CultureInfo culture) =>
+        string.IsNullOrEmpty(value as string) ? Visibility.Visible : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter,
+        System.Globalization.CultureInfo culture) => Binding.DoNothing;
+}
+
+/// <summary>
+/// Rebuilds a TextBlock's inlines so every query token is highlighted in place.
+/// A plain Text binding cannot do this, and one run per match keeps long notes readable.
+/// </summary>
+public static class SearchHighlight
+{
+    private static readonly Brush MarkBack = MakeBrush("#E6F1FB");
+    private static readonly Brush MarkFore = MakeBrush("#185FA5");
+
+    public static readonly DependencyProperty TextProperty = DependencyProperty.RegisterAttached(
+        "Text", typeof(string), typeof(SearchHighlight),
+        new PropertyMetadata(string.Empty, OnChanged));
+
+    public static readonly DependencyProperty QueryProperty = DependencyProperty.RegisterAttached(
+        "Query", typeof(string), typeof(SearchHighlight),
+        new PropertyMetadata(string.Empty, OnChanged));
+
+    public static void SetText(DependencyObject element, string value) => element.SetValue(TextProperty, value);
+    public static string GetText(DependencyObject element) => (string)element.GetValue(TextProperty);
+    public static void SetQuery(DependencyObject element, string value) => element.SetValue(QueryProperty, value);
+    public static string GetQuery(DependencyObject element) => (string)element.GetValue(QueryProperty);
+
+    private static SolidColorBrush MakeBrush(string hex)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static void OnChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not TextBlock block) return;
+        var text = GetText(block) ?? string.Empty;
+        var tokens = (GetQuery(block) ?? string.Empty)
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+        block.Inlines.Clear();
+        var ranges = new List<(int Start, int End)>();
+        foreach (var token in tokens)
+        {
+            var from = 0;
+            while (from < text.Length)
+            {
+                var at = text.IndexOf(token, from, StringComparison.OrdinalIgnoreCase);
+                if (at < 0) break;
+                ranges.Add((at, at + token.Length));
+                from = at + Math.Max(1, token.Length);
+            }
+        }
+
+        if (ranges.Count == 0)
+        {
+            block.Inlines.Add(new Run(text));
+            return;
+        }
+
+        ranges.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var merged = new List<(int Start, int End)>();
+        foreach (var range in ranges)
+        {
+            if (merged.Count > 0 && range.Start <= merged[^1].End)
+                merged[^1] = (merged[^1].Start, Math.Max(merged[^1].End, range.End));
+            else
+                merged.Add(range);
+        }
+
+        var pos = 0;
+        foreach (var range in merged)
+        {
+            if (range.Start > pos) block.Inlines.Add(new Run(text.Substring(pos, range.Start - pos)));
+            block.Inlines.Add(new Run(text.Substring(range.Start, range.End - range.Start))
+            {
+                Background = MarkBack,
+                Foreground = MarkFore
+            });
+            pos = range.End;
+        }
+        if (pos < text.Length) block.Inlines.Add(new Run(text.Substring(pos)));
     }
 }

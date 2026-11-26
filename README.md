@@ -1,12 +1,14 @@
 # DayTodo 日清单
 
-一个 Windows 桌面待办程序：按天显示任务、随手记下想法、可查历史；未完成的任务第二天自动续过来。
+一个本地优先的待办与随记工具：Windows 桌面版 + 安卓随行版。按天显示任务、随手记下想法、可查历史；未完成的任务第二天自动续过来。
 
-- 技术栈：C# / WPF / .NET 8（`net8.0-windows`），自包含发布，目标机器**不需要安装 .NET**
-- 目标系统：Windows 10 / 11，64 位（Win10/11 x64 需在你的目标机器上实测）
-- 权限：普通用户权限，安装与运行都不弹 UAC
+- 桌面技术栈：C# / WPF / .NET 8（`net8.0-windows`），自包含发布，目标机器**不需要安装 .NET**
+- 安卓技术栈：Kotlin + Jetpack Compose，minSdk 24 / targetSdk 35
+- 目标系统：Windows 10 / 11 64 位（需在你的目标机器上实测）；Android 7.0 及以上
+- 权限：桌面版普通用户权限，安装与运行都不弹 UAC
 - 主题：固定浅色
-- 当前版本：1.0.7（[下载安装包 / 便携版](https://github.com/gelandesprung/todo/releases/tag/v1.0.7)）
+- 当前版本：桌面 **1.0.9** / 安卓 **1.3**（[下载安装包 / 便携版 / APK](https://github.com/gelandesprung/todo/releases/tag/v1.0.9)）
+- 两端数据**不互通**：桌面版存在 `%APPDATA%\DayTodo`，安卓版存在应用私有目录，各自独立
 
 ## 功能
 
@@ -30,6 +32,24 @@
 | 随记引用 | 历史随记点「引用」跳回今天并插入编辑框；引用按 ID 回读原文，源被删时用快照兜底 |
 | 随记折叠 | 长随记默认只显示约 3 行，可「展开全文 / 收起」；折叠状态只在本机界面上，不写进数据 |
 | 当天可改 | 今天的随记可编辑、删除；跨零点后永久只读 |
+| @ 待办引用 | 随记正文打 `@` 弹层列出今天 / 昨天的任务，选中后写入引用；删掉正文里的 `@标题` 即解除引用 |
+| 全文搜索 | 标签行右侧常驻搜索框，`Ctrl+F` 聚焦；检索全部日期的任务标题 / 标签与随记正文，空格分词取交集，结果按日期倒序分组、命中词高亮；只读，点结果跳回原日期并定位高亮，`Esc` 退出 |
+
+## 安卓版（1.3）
+
+首页是「日期标题 + 日期胶囊条 + 进度摘要 + 分组列表 + 底部三栏 + 右下角 FAB」；任务规则与桌面版一致（今天 / 未来可编辑，历史只读），随记只能记当天。长任务点开居中全文对话框，可复制文本。
+
+搜索从首页右上角的搜索图标进入独立搜索页：输入框自动聚焦并弹出键盘，底部导航与 FAB 暂时隐藏；按日期倒序分组、命中词高亮，筛选「全部 / 任务 / 随记 / 未完成」。结果只读，点一条退出搜索、跳到对应日期与标签、滚动定位并短暂高亮；返回键或左上角箭头退出。跳到日期胶囊条覆盖范围之外时，界面会临时补一个该日胶囊，避免选中态丢失。
+
+安卓数据存在应用私有目录 `filesDir/daytodo-data.json`，**不与桌面版同步或互通**。
+
+构建（工具链内置在 `tools\`，国内镜像直连、不走代理）：
+
+```powershell
+& "D:\workbuddy\todo\tools\build-android.ps1" -GradleArgs "assembleDebug","--console=plain","--no-daemon"
+```
+
+产物：`android\app\build\outputs\apk\debug\DayTodo-1.3-debug.apk`。本机没有常驻模拟器，界面需在真机上验证。
 
 ## 目录结构
 
@@ -57,13 +77,22 @@ D:\workbuddy\todo\
 │     ├─ McpTaskService.cs    任务工具的数据操作
 │     ├─ McpNoteService.cs    随记工具的数据操作
 │     └─ McpSettings.cs       开关状态持久化
+├─ android\
+│  ├─ app\src\main\java\com\daytodo\android\
+│  │  ├─ MainActivity.kt      入口
+│  │  ├─ model\Models.kt      数据模型与日期工具
+│  │  ├─ data\Repository.kt   本地 JSON 存储（filesDir）
+│  │  ├─ data\ReminderScheduler.kt 每日提醒
+│  │  └─ ui\                  Compose 页面与视图模型（MainScreen / SearchScreen / SettingsScreen / Sheets / Theme / DayTodoApp）
+│  └─ app\build.gradle.kts    安卓版本 1.3（versionCode 4）
+├─ tools\                     本机 JDK 17 / Gradle 8.9 / Android SDK / .NET SDK（不入库）
 ├─ build\
 │  ├─ make-icon.ps1          生成多尺寸 ico + 托盘 png
 │  ├─ publish.ps1            一键编译 / 发布 / 打安装包
 │  └─ installer.iss          Inno Setup 6 脚本（当前用户安装）
 ├─ dist\
 │  ├─ portable\DayTodo.exe   单文件便携版
-│  └─ installer\DayTodo-Setup-1.0.7.exe
+│  └─ installer\DayTodo-Setup-1.0.9.exe
 └─ README.md
 ```
 
@@ -262,8 +291,10 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 | `QuoteSaved` / `NotesInDayFile` | 引用随保存写入日文件，条数与当天文件一致 |
 | `HistoryNoteReadOnly` / `HistoryRowNotEditable` / `HistoryEditButtonHidden` / `HistoryDeleteButtonHidden` | 历史随记只读：不能写入，编辑 / 删除按钮不渲染 |
 | `LongNoteCanFold` / `LongNoteInitiallyCollapsed` / `LongNoteExpanded` / `LongNoteCollapsedAgain` | 长随记默认折叠、展开、再次收起 |
+| `SearchOpened` / `SearchHits` / `SearchHasTaskHit` / `SearchHasNoteHit` / `SearchGroupHeaders` / `SearchHighlightRuns` | 搜索入口、跨天命中（任务 + 随记）、日期分组与命中词高亮 |
+| `SearchFilterTasksOnly` / `SearchDownHandled` / `SearchEnterHandled` / `SearchJumpedToHitDay` / `SearchClickJumped` / `SearchEscKeptDate` | 筛选、↑↓ / Enter / 点击跳转、Esc 恢复日期均通过 |
 
-版本记录：1.0.1 修掉启动期绑定异常（`ProgressBar.Value` 默认双向绑定，绑定到只读计算属性 `Progress` 时 WPF 尝试回写并抛异常，已改为 `Mode=OneWay`）；1.0.2 重做添加栏（带边框的长输入框、框内提示文字、回车与按钮双通道），并把自检扩展为端到端交互测试；1.0.3 抽出设置面板，开机自启 / 记录位置 / MCP 端口令牌等操作全部收进设置，主界面左栏只留 MCP 服务一项；1.0.4 把全库单文件改成按天分片（`days\yyyy-MM-dd.json` + `manifest.json`），加入脏写、按日备份、单日损坏隔离与旧数据迁移，为网盘同步和将来的移动端读取预留文件布局；同时抽出 `CloudStore` 抽象接口（默认惰性、不含任何云端实现），并给每条任务加上「撤回」操作（拿回编辑框改完重发，编辑框只保留最后一条撤回）。1.0.5 加入「随记」：按天归类、只能记今天、历史只读、支持跨天引用，和任务共用同一份日文件；1.0.6 加长随记折叠（约 3 行 / 展开 / 收起）并把版本号改成从 csproj 单一来源驱动打包；1.0.7 把随记接入 MCP，新增 5 个随记工具，让 AI 客户端也能读写、搜索随记。
+版本记录：1.0.1 修掉启动期绑定异常（`ProgressBar.Value` 默认双向绑定，绑定到只读计算属性 `Progress` 时 WPF 尝试回写并抛异常，已改为 `Mode=OneWay`）；1.0.2 重做添加栏（带边框的长输入框、框内提示文字、回车与按钮双通道），并把自检扩展为端到端交互测试；1.0.3 抽出设置面板，开机自启 / 记录位置 / MCP 端口令牌等操作全部收进设置，主界面左栏只留 MCP 服务一项；1.0.4 把全库单文件改成按天分片（`days\yyyy-MM-dd.json` + `manifest.json`），加入脏写、按日备份、单日损坏隔离与旧数据迁移，为网盘同步和将来的移动端读取预留文件布局；同时抽出 `CloudStore` 抽象接口（默认惰性、不含任何云端实现），并给每条任务加上「撤回」操作（拿回编辑框改完重发，编辑框只保留最后一条撤回）。1.0.5 加入「随记」：按天归类、只能记今天、历史只读、支持跨天引用，和任务共用同一份日文件；1.0.6 加长随记折叠（约 3 行 / 展开 / 收起）并把版本号改成从 csproj 单一来源驱动打包；1.0.7 把随记接入 MCP，新增 5 个随记工具，让 AI 客户端也能读写、搜索随记。1.0.8 加长任务全文卡片（窗口内 overlay，可复制）与随记里的 `@` 待办引用；安卓 1.1 重做首页界面、1.2 加任务全文对话框。1.0.9 / 安卓 1.3 加入全文搜索：跨全部日期检索任务标题 / 标签与随记正文，空格分词取交集，按日期倒序分组、命中词高亮，结果只读并跳回原日期定位；桌面用标签行搜索框 + `Ctrl+F`，安卓用独立搜索页。
 
 测试清单：
 
@@ -287,6 +318,7 @@ Get-Content "$env:TEMP\DayTodo-verify.ok"
 18. 切到「随记」写一条长文本 → 默认只显示约 3 行 → 点「展开全文」看完整内容 → 点「收起」回到 3 行
 19. 翻到昨天 → 底部没有输入框、随记的编辑/删除按钮不显示；点历史随记「引用」→ 跳回今天并把引用插进编辑框，保存后按 ID 回读原文
 20. 让 AI 客户端通过 MCP 调 `create_note` / `search_notes` / `update_note` / `delete_note` → 界面立刻刷新；对历史随记的更新与删除应返回只读错误
+21. 按 `Ctrl+F` 或点标签行搜索框 → 输入跨天关键词 → 任务 / 随记命中按日期倒序显示并高亮 → 切「任务 / 随记 / 未完成」筛选 → 点一条跳到那天并短暂高亮；按 `Esc` 回到进入搜索前的日期
 
 常见坑：
 

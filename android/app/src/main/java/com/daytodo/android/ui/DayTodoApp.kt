@@ -27,6 +27,7 @@ fun DayTodoApp(vm: MainViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
 
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
     var showAddTask by remember { mutableStateOf(false) }
     var showNoteComposer by remember { mutableStateOf(false) }
     var editingNote by remember { mutableStateOf<NoteItem?>(null) }
@@ -67,11 +68,28 @@ fun DayTodoApp(vm: MainViewModel = viewModel()) {
             onBack = { showSettings = false },
             onToast = { notify(it) }
         )
+    } else if (showSearch) {
+        SearchScreen(
+            vm = vm,
+            snackbarHost = snackbarHost,
+            onBack = {
+                showSearch = false
+                vm.closeSearch()
+            },
+            onOpenHit = { hit ->
+                vm.openSearchHit(hit)
+                showSearch = false
+            }
+        )
     } else {
         MainScreen(
             vm = vm,
             snackbarHost = snackbarHost,
             onOpenCalendar = { showDateSheet = true },
+            onOpenSearch = {
+                vm.openSearch()
+                showSearch = true
+            },
             onAddTask = { showAddTask = true },
             onAddNote = { showNoteComposer = true },
             onTaskActions = { taskActions = it },

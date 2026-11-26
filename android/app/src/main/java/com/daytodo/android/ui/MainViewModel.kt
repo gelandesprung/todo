@@ -23,9 +23,33 @@ enum class AppTab {
     Notes
 }
 
+enum class SearchFilter {
+    All,
+    Tasks,
+    Notes,
+    Open
+}
+
 data class TaskRow(
     val item: TaskItem,
     val carriedDays: Long = 0
+)
+
+/** 搜索命中项：只读，点击只负责跳回原日期与标签。 */
+data class SearchHit(
+    val id: String,
+    val date: String,
+    val text: String,
+    val isTask: Boolean,
+    val isDone: Boolean,
+    val meta: String
+)
+
+/** 按日期分组的搜索结果，界面直接渲染。 */
+data class SearchGroup(
+    val date: String,
+    val label: String,
+    val hits: List<SearchHit>
 )
 
 /** 可撤销的操作快照。只保留最近一次，和桌面版「只留最后一条撤回」的行为一致。 */
@@ -71,6 +95,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     var notes by mutableStateOf<List<NoteItem>>(emptyList())
+        private set
+
+    // ---- 搜索：临时覆盖视图，不写数据、不改日历选中值 ----
+    var isSearching by mutableStateOf(false)
+        private set
+
+    var searchText by mutableStateOf("")
+        private set
+
+    var searchFilter by mutableStateOf(SearchFilter.All)
+        private set
+
+    var searchGroups by mutableStateOf<List<SearchGroup>>(emptyList())
+        private set
+
+    val searchTokens: List<String>
+        get() = if (searchText.isBlank()) emptyList()
+                else searchText.split(Regex("\\s+")).filter { it.isNotEmpty() }
+
+    val hasSearchQuery: Boolean get() = searchTokens.isNotEmpty()
+
+    val searchHitCount: Int get() = searchGroups.sumOf { it.hits.size }
+
+    val showSearchGuide: Boolean get() = !hasSearchQuery
+
+    val hasNoSearchHits: Boolean get() = hasSearchQuery && searchHitCount == 0
+
+    val searchSummaryText: String
+        get() = if (!hasSearchQuery) "输入关键词，搜索全部日期"
+                else "找到 $searchHitCount 条 · 按日期排序"
+
+    /** 跳到日期条覆盖范围之外时临时补的胶囊；改选日期或退出搜索后清掉。 */
+    var extraDate by mutableStateOf<String?>(null)
+        private set
+
+    /** 跳转目标行的短暂高亮，由界面延时清除。 */
+    var highlightHitId by mutableStateOf<String?>(null)
         private set
 
     var taskDraft by mutableStateOf("")
@@ -125,6 +186,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectDate(value: String) {
         selectedDate = value
+        if (extraDate != null && extraDate != value) extraDate = null
         resetTransient()
         refresh()
     }
@@ -284,8 +346,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openReference(reference: NoteReference) {
         selectedDate = reference.date
         tab = AppTab.Notes
+        extraDate = null
         resetTransient()
         refresh()
+    }
+
+    fun openSearch() {
+        if (isSearching) return
+        isSearching = true
+        rebuildSearch()
+    }
+
+    fun closeSearch() {
+        if (!isSearching) return
+        isSearching = false
+        searchText = ""
+        searchFilter = SearchFilter.All
+        extraDate = null
+        rebuildSearch()
+    }
+
+    fun updateSearchText(value: String) {
+        searchText = value
+        rebuildSearch()
+    }
+
+    fun changeSearchFilter(value: SearchFilter) {
+        if (searchFilter == value) return
+        searchFilter = value
+        rebuildSearch()
+    }
+
+    fun clearHighlight() {
+        highlightHitId = null
+    }
+
+    /** 结果只读：退出搜索、切到命中日期与标签、滚动定位由界面完成，这里只发信号。 */
+    fun openSearchHit(hit: SearchHit) {
+        val stillThere = if (hit.isTask) {
+            _data.days.values.any { day -> day.tasks.any { it.id == hit.id } }
+        } else {
+            _data.days.values.any { day -> day.notes.any { it.id == hit.id } }
+        }
+        if (!stillThere) return
+
+        closeSearch()
+        tab = if (hit.isTask) AppTab.Tasks else AppTab.Notes
+        selectedDate = hit.date
+        val today = Dates.today()
+        extraDate = if (hit.date < Dates.shift(today, -6) || hit.date > Dates.shift(today, 7)) hit.date else null
+        resetTransient()
+        refresh()
+        highlightHitId = hit.id
     }
 
     fun noteText(reference: NoteReference): String =
@@ -376,6 +488,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingQuote = null
         noteDraft = ""
     }
+
+    private fun rebuildSearch() {
+        val tokens = searchTokens
+        if (!isSearching || tokens.isEmpty()) {
+            searchGroups = emptyList()
+            return
+        }
+        val today = Dates.today()
+        val hits = mutableListOf<SearchHit>()
+
+        if (searchFilter != SearchFilter.Notes) {
+            _data.days.values.flatMap { it.tasks }
+                .filter { task ->
+                    if (searchFilter == SearchFilter.Open && task.done) return@filter false
+                    val haystack = task.title + " " + task.tags.joinToString(" ")
+                    tokens.all { haystack.contains(it, ignoreCase = true) }
+                }
+                .forEach { task ->
+                    val tags = if (task.tags.isEmpty()) "" else " · " + task.tags.joinToString(" ")
+                    val priority = when (task.priority) {
+                        2 -> "高"
+                        1 -> "中"
+                        else -> "低"
+                    }
+                    hits += SearchHit(
+                        id = task.id,
+                        date = effectiveTaskDate(task, today),
+                        text = task.title,
+                        isTask = true,
+                        isDone = task.done,
+                        meta = "任务 · $priority$tags · " + (if (task.done) "已完成" else "未完成")
+                    )
+                }
+        }
+
+        if (searchFilter == SearchFilter.All || searchFilter == SearchFilter.Notes) {
+            _data.days.values.flatMap { it.notes }
+                .filter { note -> tokens.all { token -> note.text.contains(token, ignoreCase = true) } }
+                .forEach { note ->
+                    hits += SearchHit(
+                        id = note.id,
+                        date = note.date,
+                        text = note.text,
+                        isTask = false,
+                        isDone = false,
+                        meta = "随记 · " + timeLabel(note.createdAt)
+                    )
+                }
+        }
+
+        searchGroups = hits.groupBy { it.date }
+            .toSortedMap(compareByDescending<String> { it })
+            .map { (date, dayHits) ->
+                val label = when {
+                    date == today -> "今天 · ${Dates.label(date)}"
+                    date == Dates.shift(today, -1) -> "昨天 · ${Dates.label(date)}"
+                    else -> Dates.label(date)
+                }
+                SearchGroup(
+                    date = date,
+                    label = label,
+                    hits = dayHits.sortedWith(
+                        compareByDescending<SearchHit> { it.isTask }.thenBy { it.text }
+                    )
+                )
+            }
+    }
+
+    /** 顺延中的任务按「当前显示日」归属，跳过去才看得到。 */
+    private fun effectiveTaskDate(task: TaskItem, today: String): String =
+        if (_data.settings.autoCarry && !task.done && task.date < today) today else task.date
 
     private fun refresh() {
         val today = Dates.today()

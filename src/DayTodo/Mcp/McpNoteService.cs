@@ -218,6 +218,13 @@ public sealed class McpNoteService
         return source != null ? Snapshot(source.Text) : quote.Text;
     }
 
+    /// <summary>Live title of a mentioned task; the stored snapshot covers deletions.</summary>
+    private static string ResolveTaskTitle(AppData data, NoteTaskReference taskRef)
+    {
+        var task = data.Tasks.FirstOrDefault(t => t.Id == taskRef.TaskId);
+        return task != null && task.Title.Length > 0 ? task.Title : taskRef.Title;
+    }
+
     /// <summary>Serializable view for MCP replies. Quote text is resolved on the UI thread.</summary>
     public object Describe(NoteItem note) => _dispatcher.Invoke(() => DescribeCore(note));
 
@@ -235,6 +242,12 @@ public sealed class McpNoteService
             date = r.Date,
             note_id = r.NoteId.ToString(),
             text = ResolveQuote(_data, r)
+        }).ToList(),
+        task_references = (note.TaskRefs ?? new List<NoteTaskReference>()).Select(r => new
+        {
+            date = r.Date,
+            task_id = r.TaskId.ToString(),
+            title = ResolveTaskTitle(_data, r)
         }).ToList()
     };
 }

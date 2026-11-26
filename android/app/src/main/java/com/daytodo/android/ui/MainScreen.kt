@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
@@ -89,6 +90,7 @@ import com.daytodo.android.model.Dates
 import com.daytodo.android.model.NoteItem
 import com.daytodo.android.model.NoteReference
 import com.daytodo.android.model.TaskItem
+import kotlinx.coroutines.delay
 
 private val WEEK_SHORT = listOf("一", "二", "三", "四", "五", "六", "日")
 
@@ -120,6 +122,7 @@ fun MainScreen(
     vm: MainViewModel,
     snackbarHost: @Composable () -> Unit,
     onOpenCalendar: () -> Unit,
+    onOpenSearch: () -> Unit,
     onAddTask: () -> Unit,
     onAddNote: () -> Unit,
     onTaskActions: (TaskItem) -> Unit,
@@ -136,6 +139,15 @@ fun MainScreen(
     // 全文对话框指向一条具体任务，切日期后它就不再成立，直接关掉。
     var detailRow by remember { mutableStateOf<TaskRow?>(null) }
     LaunchedEffect(selected) { detailRow = null }
+
+    // 搜索跳转后的定位高亮只留一小会儿，避免长期改变列表外观。
+    val highlightId = vm.highlightHitId
+    LaunchedEffect(highlightId) {
+        if (highlightId != null) {
+            delay(1200)
+            vm.clearHighlight()
+        }
+    }
 
     Scaffold(
         containerColor = TodoColors.Bg,
@@ -177,6 +189,7 @@ fun MainScreen(
                 isToday = isToday,
                 isPast = isPast,
                 onOpenCalendar = onOpenCalendar,
+                onOpenSearch = onOpenSearch,
                 onClearCompleted = onClearCompleted
             )
             if (isPast) ReadonlyBanner()
@@ -216,6 +229,7 @@ private fun AppHeader(
     isToday: Boolean,
     isPast: Boolean,
     onOpenCalendar: () -> Unit,
+    onOpenSearch: () -> Unit,
     onClearCompleted: () -> Unit
 ) {
     Surface(color = TodoColors.Surface, border = BorderStroke(0.5.dp, TodoColors.Line)) {
@@ -253,6 +267,14 @@ private fun AppHeader(
                         }
                     }
                 }
+                IconButton(onClick = onOpenSearch, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        Icons.Filled.Search,
+                        contentDescription = "搜索",
+                        tint = TodoColors.Text2,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
                 IconButton(onClick = onOpenCalendar, modifier = Modifier.size(44.dp)) {
                     Icon(
                         Icons.Filled.CalendarMonth,
@@ -266,6 +288,7 @@ private fun AppHeader(
             DateStrip(
                 selected = vm.selectedDate,
                 today = Dates.today(),
+                extraDate = vm.extraDate,
                 hasContent = { vm.hasTasksOn(it) || vm.hasNotesOn(it) },
                 onSelect = { vm.selectDate(it) }
             )
@@ -299,10 +322,15 @@ private fun RelationBadge(text: String, highlight: Boolean) {
 private fun DateStrip(
     selected: String,
     today: String,
+    extraDate: String?,
     hasContent: (String) -> Boolean,
     onSelect: (String) -> Unit
 ) {
-    val dates = remember(today) { (-6..7).map { Dates.shift(today, it.toLong()) } }
+    // 搜索跳到日期条范围外时临时补一个胶囊，否则选中态会丢。
+    val dates = remember(today, extraDate) {
+        val base = (-6..7).map { Dates.shift(today, it.toLong()) }
+        (base + listOfNotNull(extraDate)).distinct().sorted()
+    }
     val selectedIndex = dates.indexOf(selected)
     val listState = rememberLazyListState()
 
@@ -554,6 +582,14 @@ private fun TaskSection(
     val carried = vm.carriedRows
     val open = vm.openRows
     val done = vm.doneRows
+    val highlightId = vm.highlightHitId
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(highlightId) {
+        if (highlightId == null) return@LaunchedEffect
+        val index = taskScrollIndex(highlightId, carried, open, done) ?: return@LaunchedEffect
+        listState.animateScrollToItem(index)
+    }
 
     if (vm.rows.isEmpty()) {
         EmptyState(
@@ -565,6 +601,7 @@ private fun TaskSection(
     }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -580,7 +617,8 @@ private fun TaskSection(
                     showActions = !isPast,
                     onToggle = { vm.toggleTask(row.item) },
                     onActions = { onActions(row.item) },
-                    onOpenDetail = { onOpenDetail(row) }
+                    onOpenDetail = { onOpenDetail(row) },
+                    highlight = row.item.id == highlightId
                 )
             }
         }
@@ -596,7 +634,8 @@ private fun TaskSection(
                     showActions = !isPast,
                     onToggle = { vm.toggleTask(row.item) },
                     onActions = { onActions(row.item) },
-                    onOpenDetail = { onOpenDetail(row) }
+                    onOpenDetail = { onOpenDetail(row) },
+                    highlight = row.item.id == highlightId
                 )
             }
         }
@@ -612,7 +651,8 @@ private fun TaskSection(
                     showActions = !isPast,
                     onToggle = { vm.toggleTask(row.item) },
                     onActions = { onActions(row.item) },
-                    onOpenDetail = { onOpenDetail(row) }
+                    onOpenDetail = { onOpenDetail(row) },
+                    highlight = row.item.id == highlightId
                 )
             }
         }
@@ -643,6 +683,24 @@ private fun SectionLabel(text: String, count: Int) {
     }
 }
 
+/** 列表项前有分组标题，滚动位置要把非空组的标题算进去。 */
+private fun taskScrollIndex(
+    id: String,
+    carried: List<TaskRow>,
+    open: List<TaskRow>,
+    done: List<TaskRow>
+): Int? {
+    var index = 0
+    for (group in listOf(carried, open, done)) {
+        if (group.isEmpty()) continue
+        index += 1
+        val position = group.indexOfFirst { it.item.id == id }
+        if (position >= 0) return index + position
+        index += group.size
+    }
+    return null
+}
+
 @Composable
 private fun TaskRowView(
     row: TaskRow,
@@ -650,7 +708,8 @@ private fun TaskRowView(
     showActions: Boolean,
     onToggle: () -> Unit,
     onActions: () -> Unit,
-    onOpenDetail: () -> Unit
+    onOpenDetail: () -> Unit,
+    highlight: Boolean = false
 ) {
     val item = row.item
     val shape = RoundedCornerShape(12.dp)
@@ -662,7 +721,10 @@ private fun TaskRowView(
         modifier = Modifier.fillMaxWidth(),
         shape = shape,
         color = TodoColors.Surface,
-        border = BorderStroke(1.dp, TodoColors.Line)
+        border = BorderStroke(
+            width = if (highlight) 2.dp else 1.dp,
+            color = if (highlight) TodoColors.Accent else TodoColors.Line
+        )
     ) {
         Row(
             modifier = Modifier
@@ -948,6 +1010,15 @@ private fun NoteSection(
     onActions: (NoteItem) -> Unit,
     onOpenReference: (NoteReference) -> Unit
 ) {
+    val highlightId = vm.highlightHitId
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(highlightId) {
+        if (highlightId == null) return@LaunchedEffect
+        val index = vm.notes.indexOfFirst { it.id == highlightId }
+        if (index >= 0) listState.animateScrollToItem(index)
+    }
+
     if (vm.notes.isEmpty()) {
         EmptyState(
             icon = Icons.Filled.Description,
@@ -962,6 +1033,7 @@ private fun NoteSection(
     }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -971,6 +1043,7 @@ private fun NoteSection(
                 note = note,
                 relation = if (isToday) "今天" else if (isPast) "历史" else "计划",
                 editable = isToday,
+                highlight = note.id == highlightId,
                 referenceLabel = { ref -> "引用 ${dateTitle(ref.date)} · ${vm.noteText(ref).take(12)}" },
                 onActions = { onActions(note) },
                 onOpenReference = onOpenReference
@@ -984,6 +1057,7 @@ private fun NoteCardView(
     note: NoteItem,
     relation: String,
     editable: Boolean,
+    highlight: Boolean = false,
     referenceLabel: (NoteReference) -> String,
     onActions: () -> Unit,
     onOpenReference: (NoteReference) -> Unit
@@ -995,7 +1069,10 @@ private fun NoteCardView(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         color = TodoColors.Surface,
-        border = BorderStroke(1.dp, TodoColors.Line)
+        border = BorderStroke(
+            width = if (highlight) 2.dp else 1.dp,
+            color = if (highlight) TodoColors.Accent else TodoColors.Line
+        )
     ) {
         Column(Modifier.padding(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

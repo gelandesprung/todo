@@ -293,10 +293,142 @@ public partial class App : Application, ISettingsHost
                             noteDoc.RootElement.GetProperty("Notes").GetArrayLength());
                     }
 
+                    // @ 引用：弹层只列今天/昨天的待办，回车把 @标题 写进正文并留下链接。
+                    var noteListBox = _window.FindName("NoteList") as System.Windows.Controls.ListBox;
+                    var mentionPopup = _window.FindName("MentionPopup")
+                        as System.Windows.Controls.Primitives.Popup;
+                    var mentionList = _window.FindName("MentionList") as System.Windows.Controls.ListBox;
+
+                    // Reads a note's TaskRefs count straight from today's file, matched by text.
+                    System.Func<string, int> taskRefsOfNote = prefix =>
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(
+                            System.IO.File.ReadAllText(DataStore.TodayFilePath));
+                        foreach (var note in doc.RootElement.GetProperty("Notes").EnumerateArray())
+                        {
+                            if (!note.TryGetProperty("Text", out var textNode)) continue;
+                            if (!(textNode.GetString() ?? string.Empty)
+                                .StartsWith(prefix, StringComparison.Ordinal)) continue;
+                            return note.TryGetProperty("TaskRefs", out var refs)
+                                ? refs.GetArrayLength()
+                                : 0;
+                        }
+                        return -1;
+                    };
+
+                    noteBox.Text = "复盘 ";
+                    noteBox.CaretIndex = noteBox.Text.Length;
+                    noteBox.AppendText("@");
+                    _window.UpdateLayout();
+                    log.AppendLine("MentionPopupOpen=" + (mentionPopup?.IsOpen == true));
+                    log.AppendLine("MentionTargetIsNoteBox=" +
+                        ReferenceEquals(mentionPopup?.PlacementTarget, noteBox));
+                    log.AppendLine("MentionCandidates=" + (mentionList?.Items.Count ?? 0));
+                    log.AppendLine("MentionPanelWidth=" +
+                        (mentionPopup?.Child as System.Windows.FrameworkElement)?.ActualWidth);
+                    if (mentionPopup?.Child is System.Windows.FrameworkElement panel)
+                        SaveShotElement(panel, "mention-popup", 2.0);
+
+                    var picked = mentionList?.SelectedItem as NoteMentionItem;
+                    log.AppendLine("MentionPicked=" + (picked?.Title ?? "(none)"));
+                    log.AppendLine("MentionDayLabel=" + (picked?.DetailText ?? "(none)"));
+
+                    // Enter belongs to the popup while it is open: commit, do not save.
+                    var mentionEnter = noteEnter();
+                    log.AppendLine("MentionCommitHandled=" + mentionEnter.Handled);
+                    log.AppendLine("MentionTextInserted=" +
+                        (picked != null && noteBox.Text == "复盘 @" + picked.Title + " "));
+                    log.AppendLine("MentionCaretAfterInsert=" + (noteBox.CaretIndex == noteBox.Text.Length));
+                    log.AppendLine("MentionPopupClosed=" + (mentionPopup?.IsOpen == false));
+
+                    // Deleting the @text is how a mention is undone: the link goes with it.
+                    noteBox.Text = "复盘";
+                    noteEnter();
+                    log.AppendLine("MentionPrunedWhenTextRemoved=" + (taskRefsOfNote("复盘") == 0));
+
+                    noteBox.Text = "再说一次 ";
+                    noteBox.CaretIndex = noteBox.Text.Length;
+                    noteBox.AppendText("@");
+                    noteEnter();   // picks the first candidate
+                    noteEnter();   // no popup now: saves the note
+                    log.AppendLine("MentionSavedToFile=" + (taskRefsOfNote("再说一次") == 1));
+
+                    _window.UpdateLayout();
+                    var linkedRow = _vm.Notes.FirstOrDefault(n => n.HasTaskLinks);
+                    log.AppendLine("MentionRowHasChip=" + (linkedRow != null));
+                    log.AppendLine("MentionChipText=" +
+                        (linkedRow == null
+                            ? "(none)"
+                            : linkedRow.TaskLinks[0].DayText + "/" + linkedRow.TaskLinks[0].Text));
+                    if (linkedRow != null && noteListBox != null) noteListBox.ScrollIntoView(linkedRow);
+                    _window.UpdateLayout();
+                    SaveShot(_window, "notes-list");
+
+                    if (linkedRow != null)
+                    {
+                        var linkedItem = noteListBox?.ItemContainerGenerator.ContainerFromItem(linkedRow)
+                            as System.Windows.Controls.ListBoxItem;
+                        var chipButton = linkedItem == null
+                            ? null
+                            : FindVisual<System.Windows.Controls.Button>(linkedItem,
+                                b => b.Command == linkedRow.TaskLinks[0].OpenCommand);
+                        log.AppendLine("MentionChipButtonRendered=" + (chipButton != null));
+
+                        linkedRow.TaskLinks[0].OpenCommand.Execute(null);
+                        log.AppendLine("MentionJumpToTasksTab=" + !_vm.IsNotesTab);
+                        log.AppendLine("MentionJumpToTaskDay=" +
+                            (_vm.SelectedDate.Date == DateTime.Today));
+                        _vm.ShowNotesCommand.Execute(null);
+                        _window.UpdateLayout();
+                    }
+
+                    // 高度：短随记不再占满三行，长随记封顶三行，折叠按钮只在真放不下时出现。
+                    var mediumText = new string('中', 80);
+                    noteBox.Text = mediumText;
+                    noteEnter();
+                    _window.UpdateLayout();
+
+                    var shortRow = _vm.Notes.FirstOrDefault(n => n.Text == "复盘");
+                    var mediumRow = _vm.Notes.FirstOrDefault(n => n.Text == mediumText);
+                    log.AppendLine("MediumRowSeededFold=" + (mediumRow != null));
+                    log.AppendLine("MediumNoteFitsWithoutFold=" + (mediumRow?.CanFold == false));
+
+                    System.Func<NoteRowViewModel?, double> collapsedHeight = row =>
+                    {
+                        if (row == null || noteListBox == null) return -1;
+                        // The list virtualises: a row that never scrolled into view has no
+                        // container to measure, so bring it in first.
+                        noteListBox.ScrollIntoView(row);
+                        noteListBox.UpdateLayout();
+                        var item = noteListBox.ItemContainerGenerator.ContainerFromItem(row)
+                            as System.Windows.Controls.ListBoxItem;
+                        if (item == null) return -1;
+                        var block = FindVisual<System.Windows.Controls.TextBlock>(item,
+                            t => t.MaxHeight > 0 && t.MaxHeight < 200);
+                        return block?.ActualHeight ?? -1;
+                    };
+
+                    var shortHeight = collapsedHeight(shortRow);
+                    var mediumHeight = collapsedHeight(mediumRow);
+                    log.AppendLine("ShortNoteHeight=" + shortHeight);
+                    log.AppendLine("ShortNoteNotThreeLines=" + (shortHeight > 0 && shortHeight < 40));
+                    log.AppendLine("MediumNoteNotCapped=" + (mediumHeight > 0 && mediumHeight < 57));
+
+                    noteBox.Text = "三行封顶 " + new string('长', 200);
+                    noteEnter();
+                    var tallRow = _vm.Notes.FirstOrDefault(n => n.Text.StartsWith("三行封顶"));
+                    if (tallRow != null && noteListBox != null) noteListBox.ScrollIntoView(tallRow);
+                    _window.UpdateLayout();
+                    var tallHeight = collapsedHeight(tallRow);
+                    log.AppendLine("TallNoteHeight=" + tallHeight);
+                    log.AppendLine("TallNoteCappedAtThreeLines=" + (tallHeight > 56 && tallHeight < 58));
+                    log.AppendLine("TallNoteFoldable=" + (tallRow?.CanFold == true));
+                    SaveShot(_window, "notes-fold");
+
                     // A past day must expose no editor and no edit/delete commands.
                     var yesterday = DateUtil.From(DateTime.Today.AddDays(-1));
                     _vm.SeedNoteForVerify(yesterday, "历史随记");
-                    _vm.SeedNoteForVerify(yesterday, new string('长', 120));
+                    _vm.SeedNoteForVerify(yesterday, new string('长', 300));
                     _vm.SelectedDate = DateTime.Today.AddDays(-1);
                     _window.UpdateLayout();
                     log.AppendLine("HistoryNoteReadOnly=" + !_vm.CanWriteNote);
@@ -322,6 +454,8 @@ public partial class App : Application, ISettingsHost
                     }
 
                     var longRow = _vm.Notes.FirstOrDefault(n => n.Text.Length > 100);
+                    if (longRow != null && noteList != null) noteList.ScrollIntoView(longRow);
+                    _window.UpdateLayout();
                     log.AppendLine("LongNoteCanFold=" + (longRow?.CanFold == true));
                     log.AppendLine("LongNoteInitiallyCollapsed=" + (longRow?.IsCollapsed == true));
                     var longIndex = longRow == null ? -1 : _vm.Notes.IndexOf(longRow);
@@ -407,6 +541,105 @@ public partial class App : Application, ISettingsHost
                             log.AppendLine("ShortTaskCardRefused=" + !_vm.IsDetailOpen);
                         }
                     }
+
+                    // 搜索：聚焦入口、跨天结果、高亮、筛选、键盘跳转与 Esc 退出。
+                    var searchBox = _window.FindName("SearchBox") as System.Windows.Controls.TextBox;
+                    var searchLayer = _window.FindName("SearchLayer") as System.Windows.FrameworkElement;
+                    var searchList = _window.FindName("SearchList") as System.Windows.Controls.ListBox;
+                    if (searchBox == null || searchLayer == null || searchList == null)
+                        throw new Exception("search UI missing");
+
+                    _window.FocusSearchBox();
+                    // FocusSearchBox defers to the input queue; flush it before asserting.
+                    Dispatcher.CurrentDispatcher.Invoke(new Action(() => { }),
+                        DispatcherPriority.Input);
+                    _window.UpdateLayout();
+                    log.AppendLine("SearchOpened=" + _vm.IsSearching);
+                    log.AppendLine("SearchLayerVisible=" + (searchLayer.Visibility == Visibility.Visible));
+                    log.AppendLine("SearchGuideVisible=" + _vm.ShowSearchGuide);
+
+                    searchBox.Text = "自检";
+                    _window.UpdateLayout();
+                    log.AppendLine("SearchTextVm=" + _vm.SearchText);
+                    log.AppendLine("SearchHits=" + _vm.SearchHitCount);
+                    log.AppendLine("SearchHasTaskHit=" +
+                        _vm.SearchResults.OfType<SearchHit>().Any(h => h.IsTask));
+                    log.AppendLine("SearchHasNoteHit=" +
+                        _vm.SearchResults.OfType<SearchHit>().Any(h => !h.IsTask));
+                    log.AppendLine("SearchGroupHeaders=" + _vm.SearchResults.OfType<SearchGroupHeader>().Count());
+
+                    var firstHit = _vm.SearchResults.OfType<SearchHit>().FirstOrDefault();
+                    if (firstHit != null)
+                    {
+                        var hitIndex = _vm.SearchResults.IndexOf(firstHit);
+                        var hitItem = searchList.ItemContainerGenerator.ContainerFromIndex(hitIndex)
+                            as System.Windows.FrameworkElement;
+                        var marked = hitItem == null ? null
+                            : FindVisual<System.Windows.Controls.TextBlock>(hitItem,
+                                t => t.Inlines.Count > 1);
+                        log.AppendLine("SearchHighlightRuns=" + (marked?.Inlines.Count ?? 0));
+                    }
+                    SaveShot(_window, "search-results", 2.0);
+
+                    _vm.SetSearchFilterCommand.Execute(1);
+                    log.AppendLine("SearchFilterTasksOnly=" +
+                        _vm.SearchResults.OfType<SearchHit>().All(h => h.IsTask));
+                    _vm.SetSearchFilterCommand.Execute(0);
+
+                    System.Func<System.Windows.Input.Key, System.Windows.Input.KeyEventArgs> windowKey = key =>
+                        new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
+                            System.Windows.PresentationSource.FromVisual(_window), Environment.TickCount, key)
+                        { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
+
+                    var searchDown = windowKey(System.Windows.Input.Key.Down);
+                    _window.RaiseEvent(searchDown);
+                    var current = _vm.CurrentSearchHit;
+                    log.AppendLine("SearchDownHandled=" + searchDown.Handled);
+                    log.AppendLine("SearchCurrentExists=" + (current != null));
+                    log.AppendLine("SearchCurrentHighlighted=" + (current?.IsCurrent == true));
+
+                    var searchEnter = windowKey(System.Windows.Input.Key.Enter);
+                    _window.RaiseEvent(searchEnter);
+                    log.AppendLine("SearchEnterHandled=" + searchEnter.Handled);
+                    log.AppendLine("SearchClosedAfterJump=" + !_vm.IsSearching);
+                    if (current != null)
+                    {
+                        var jumpedDay = DateOnly.FromDateTime(_vm.SelectedDate)
+                            .ToString(DateUtil.Format, System.Globalization.CultureInfo.InvariantCulture);
+                        log.AppendLine("SearchJumpedToHitDay=" + (jumpedDay == current.Date));
+                        log.AppendLine("SearchJumpedTabMatches=" +
+                            (current.IsTask ? _vm.IsTasksTab : _vm.IsNotesTab));
+                    }
+
+                    var dayBeforeEsc = _vm.SelectedDate;
+                    _vm.OpenSearchCommand.Execute(null);
+                    var searchEsc = windowKey(System.Windows.Input.Key.Escape);
+                    _window.RaiseEvent(searchEsc);
+                    log.AppendLine("SearchEscHandled=" + searchEsc.Handled);
+                    log.AppendLine("SearchEscClosed=" + !_vm.IsSearching);
+                    log.AppendLine("SearchEscKeptDate=" + (_vm.SelectedDate == dayBeforeEsc));
+                    log.AppendLine("SearchTextClearedOnExit=" + string.IsNullOrEmpty(_vm.SearchText));
+
+                    // Clicking the hit text takes the same jump path as Enter.
+                    _vm.OpenSearchCommand.Execute(null);
+                    searchBox.Text = "自检";
+                    _window.UpdateLayout();
+                    var clickTarget = _vm.SearchResults.OfType<SearchHit>().FirstOrDefault();
+                    var clickIndex = clickTarget == null ? -1 : _vm.SearchResults.IndexOf(clickTarget);
+                    var clickItem = clickIndex < 0 ? null
+                        : searchList.ItemContainerGenerator.ContainerFromIndex(clickIndex)
+                            as System.Windows.FrameworkElement;
+                    var clickPanel = clickItem == null ? null
+                        : FindVisual<System.Windows.Controls.StackPanel>(clickItem,
+                            p => p.Cursor == System.Windows.Input.Cursors.Hand);
+                    var clickArgs = new System.Windows.Input.MouseButtonEventArgs(
+                        System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount,
+                        System.Windows.Input.MouseButton.Left)
+                    { RoutedEvent = System.Windows.UIElement.PreviewMouseLeftButtonDownEvent };
+                    clickPanel?.RaiseEvent(clickArgs);
+                    log.AppendLine("SearchClickFound=" + (clickPanel != null));
+                    log.AppendLine("SearchClickHandled=" + clickArgs.Handled);
+                    log.AppendLine("SearchClickJumped=" + !_vm.IsSearching);
                 }
                 catch (Exception ex)
                 {
@@ -559,24 +792,30 @@ public partial class App : Application, ISettingsHost
     /// Writes the current window pixels into DAYTODO_SHOT_DIR, when that variable is set.
     /// Used to eyeball layout during development; without the variable it does nothing.
     /// </summary>
-    private static void SaveShot(Window window, string name, double scale = 1.0)
+    private static void SaveShot(Window window, string name, double scale = 1.0) =>
+        SaveShotElement(window, name, scale);
+
+    /// <summary>Same as <see cref="SaveShot"/>, for a piece of UI that lives in its own window (a Popup).</summary>
+    private static void SaveShotElement(System.Windows.Media.Visual visual, string name, double scale = 1.0)
     {
         var dir = Environment.GetEnvironmentVariable("DAYTODO_SHOT_DIR");
         if (string.IsNullOrWhiteSpace(dir)) return;
 
+        if (visual is not System.Windows.FrameworkElement element) return;
+
         try
         {
             System.IO.Directory.CreateDirectory(dir);
-            var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(window);
+            var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(element);
             var factor = dpi.DpiScaleX * scale;
-            var width = (int)Math.Ceiling(window.ActualWidth * factor);
-            var height = (int)Math.Ceiling(window.ActualHeight * factor);
+            var width = (int)Math.Ceiling(element.ActualWidth * factor);
+            var height = (int)Math.Ceiling(element.ActualHeight * factor);
             if (width <= 0 || height <= 0) return;
 
             var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
                 width, height, 96 * factor, 96 * factor,
                 System.Windows.Media.PixelFormats.Pbgra32);
-            bitmap.Render(window);
+            bitmap.Render(element);
 
             var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
             encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));

@@ -84,11 +84,20 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>Quotes waiting to be attached to the note being written or edited.</summary>
     private readonly List<NoteReference> _pendingQuotes = new();
 
+    /// <summary>Todos the note being written or edited mentions with @.</summary>
+    private readonly List<NoteTaskReference> _pendingTaskRefs = new();
+
     /// <summary>The plan that was recalled and is waiting in the editor to be sent again.</summary>
     private TaskItem? _draft;
 
     /// <summary>True while the editor holds a recalled plan.</summary>
     private bool _draftPending;
+
+    // ---- 搜索（临时覆盖视图，不改 SelectedDate、不写数据） ----
+    private string _searchText = string.Empty;
+    private bool _isSearching;
+    private int _searchFilter;
+    private SearchHit? _currentSearchHit;
 
     public ObservableCollection<TaskRowViewModel> Rows { get; } = new();
     public ObservableCollection<NoteRowViewModel> Notes { get; } = new();
@@ -104,6 +113,13 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SaveNoteCommand { get; }
     public ICommand CancelNoteEditCommand { get; }
     public ICommand ClearQuotesCommand { get; }
+    public ICommand OpenSearchCommand { get; }
+    public ICommand CloseSearchCommand { get; }
+    public ICommand SetSearchFilterCommand { get; }
+    public ICommand OpenSearchHitCommand { get; }
+
+    /// <summary>Raised after a hit was jumped to, so the shell can scroll and flash it.</summary>
+    public event Action<SearchHit>? SearchHitOpened;
 
     public MainViewModel(AppData data, Action<string>? notify = null,
         Func<DateTime, DateTime?>? pickDate = null, Action? focusEditor = null,
@@ -126,6 +142,10 @@ public sealed class MainViewModel : ObservableObject
         SaveNoteCommand = new RelayCommand(_ => SaveNote());
         CancelNoteEditCommand = new RelayCommand(_ => CancelNoteEdit());
         ClearQuotesCommand = new RelayCommand(_ => ClearQuotes());
+        OpenSearchCommand = new RelayCommand(_ => OpenSearch());
+        CloseSearchCommand = new RelayCommand(_ => CloseSearch());
+        SetSearchFilterCommand = new RelayCommand(p => SetSearchFilter(Convert.ToInt32(p)));
+        OpenSearchHitCommand = new RelayCommand(p => OpenSearchHit(p as SearchHit));
 
         Rebuild();
     }
@@ -392,11 +412,14 @@ public sealed class MainViewModel : ObservableObject
         var text = _newNoteText.Trim();
         if (text.Length == 0) return;
 
+        PruneTaskRefs(text);
+
         if (_editingNote != null)
         {
             // Editing keeps identity, day and timestamp: a note never moves days.
             _editingNote.Text = text;
             _editingNote.References = _pendingQuotes.ToList();
+            _editingNote.TaskRefs = _pendingTaskRefs.ToList();
         }
         else
         {
@@ -405,7 +428,8 @@ public sealed class MainViewModel : ObservableObject
                 Date = DateUtil.Today(),
                 CreatedAt = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
                 Text = text,
-                References = _pendingQuotes.ToList()
+                References = _pendingQuotes.ToList(),
+                TaskRefs = _pendingTaskRefs.ToList()
             });
         }
 
@@ -420,7 +444,9 @@ public sealed class MainViewModel : ObservableObject
         _editingNote = note;
         _newNoteText = note.Text;
         _pendingQuotes.Clear();
-        _pendingQuotes.AddRange(note.References);
+        _pendingQuotes.AddRange(note.References ?? new List<NoteReference>());
+        _pendingTaskRefs.Clear();
+        _pendingTaskRefs.AddRange(note.TaskRefs ?? new List<NoteTaskReference>());
 
         OnPropertyChanged(nameof(NewNoteText));
         OnPropertyChanged(nameof(IsEditingNote));
@@ -492,6 +518,7 @@ public sealed class MainViewModel : ObservableObject
         _editingNote = null;
         _newNoteText = string.Empty;
         _pendingQuotes.Clear();
+        _pendingTaskRefs.Clear();
         OnPropertyChanged(nameof(NewNoteText));
         OnPropertyChanged(nameof(IsEditingNote));
         OnPropertyChanged(nameof(NoteEditorHintText));
@@ -511,6 +538,92 @@ public sealed class MainViewModel : ObservableObject
     {
         var source = data.Notes.FirstOrDefault(n => n.Id == quote.NoteId && n.Date == quote.Date);
         return source != null ? QuoteSnapshot(source.Text) : quote.Text;
+    }
+
+    // ---- 随记里的 @ ----
+
+    private const int MentionLimit = 8;
+
+    /// <summary>
+    /// Todos that may be mentioned: whatever sits on today or yesterday. The window is
+    /// deliberately that narrow - pointing a note at a plan from last month links to
+    /// something nobody can act on - and it keeps the popup short enough to pick from
+    /// without scrolling.
+    /// </summary>
+    public IReadOnlyList<NoteMentionItem> FindMentionCandidates(string? query)
+    {
+        var today = DateUtil.Today();
+        var yesterday = DateUtil.From(DateTime.Today.AddDays(-1));
+        var needle = (query ?? string.Empty).Trim();
+
+        return _data.Tasks
+            .Where(t => AppearsOn(t, today, today) || AppearsOn(t, yesterday, today))
+            .Where(t => needle.Length == 0 ||
+                        t.Title.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(t => t.Id)
+            .Select(g => g.First())
+            .Select(t => new NoteMentionItem(t.Id,
+                AppearsOn(t, today, today) ? today : yesterday,
+                t.Title, t.DateCompleted != null))
+            .OrderByDescending(m => m.Date == today)
+            .ThenBy(m => m.IsDone)
+            .ThenBy(m => m.Title, StringComparer.Ordinal)
+            .Take(MentionLimit)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Records a mention picked from the popup. Picking the same todo twice keeps one
+    /// link: the note text may carry two @titles, but both point at the same task.
+    /// </summary>
+    public void AddTaskRef(NoteMentionItem? item)
+    {
+        if (item == null) return;
+        _pendingTaskRefs.RemoveAll(r => r.TaskId == item.TaskId);
+        _pendingTaskRefs.Add(new NoteTaskReference
+        {
+            Date = item.Date,
+            TaskId = item.TaskId,
+            Title = item.Title
+        });
+    }
+
+    /// <summary>
+    /// Drops mentions whose @text is no longer in the note. Deleting the mention is how
+    /// the user removes the link, so the chips can never claim more than the text says.
+    /// </summary>
+    private void PruneTaskRefs(string text)
+    {
+        _pendingTaskRefs.RemoveAll(r => r.Title.Length == 0 ||
+                                        !text.Contains("@" + r.Title, StringComparison.Ordinal));
+    }
+
+    /// <summary>Clicking an @chip jumps to the day the todo is actually sitting on now.</summary>
+    private void OpenTaskRef(NoteTaskReference taskRef)
+    {
+        var task = _data.Tasks.FirstOrDefault(t => t.Id == taskRef.TaskId);
+        var date = task != null ? task.DateCurrent : taskRef.Date;
+
+        ShowTab(false);
+        if (!DateUtil.IsValid(date)) return;
+        SetSelectedDate(DateTime.ParseExact(date, DateUtil.Format, CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>Title and day label for a chip: live task data first, snapshot as fallback.</summary>
+    private (string Text, string Day) DescribeTaskRef(NoteTaskReference taskRef)
+    {
+        var task = _data.Tasks.FirstOrDefault(t => t.Id == taskRef.TaskId);
+        var title = task != null && task.Title.Length > 0 ? task.Title : taskRef.Title;
+        var date = task != null ? task.DateCurrent : taskRef.Date;
+        return (title, DayLabel(date));
+    }
+
+    private static string DayLabel(string date)
+    {
+        if (!DateUtil.IsValid(date)) return date;
+        if (date == DateUtil.Today()) return "今天";
+        if (date == DateUtil.From(DateTime.Today.AddDays(-1))) return "昨天";
+        return ShortDate(date);
     }
 
     /// <summary>Public helpers used by the --verify smoke test.</summary>
@@ -696,7 +809,8 @@ public sealed class MainViewModel : ObservableObject
             .OrderBy(n => n.CreatedAt, StringComparer.Ordinal)
             .ThenBy(n => n.Id)
             .Select(n => new NoteRowViewModel(n, IsToday,
-                q => ResolveQuote(_data, q), EditNote, DeleteNote, QuoteNote, OpenQuote))
+                q => ResolveQuote(_data, q), DescribeTaskRef, OpenTaskRef,
+                EditNote, DeleteNote, QuoteNote, OpenQuote))
             .ToList();
 
         Notes.Clear();
@@ -728,6 +842,8 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(NoteReadOnlyText));
         OnPropertyChanged(nameof(HeaderSummaryText));
         OnPropertyChanged(nameof(TodayNoteCount));
+
+        if (_isSearching) RebuildSearch();
     }
 
     /// <summary>Keeps the "future plans" entry point in sync with the task list.</summary>
@@ -761,11 +877,270 @@ public sealed class MainViewModel : ObservableObject
         return streak;
     }
 
+    // ---- 搜索：临时覆盖视图，跨天只读检索，跳转后才改 SelectedDate ----
+
+    public bool IsSearching
+    {
+        get => _isSearching;
+        private set => Set(ref _isSearching, value);
+    }
+
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (!Set(ref _searchText, value)) return;
+            RebuildSearch();
+        }
+    }
+
+    public ObservableCollection<SearchResultItem> SearchResults { get; } = new();
+
+    public bool HasSearchQuery => SearchTokens(_searchText).Length > 0;
+
+    public int SearchHitCount => SearchResults.OfType<SearchHit>().Count();
+
+    public bool HasNoSearchHits => HasSearchQuery && SearchHitCount == 0;
+
+    public string SearchSummaryText => !HasSearchQuery
+        ? "搜索全部日期"
+        : $"找到 {SearchHitCount} 条 · 按日期排序";
+
+    public bool FilterAllActive
+    {
+        get => _searchFilter == 0;
+        set { if (value) SetSearchFilter(0); }
+    }
+
+    public bool FilterTasksActive
+    {
+        get => _searchFilter == 1;
+        set { if (value) SetSearchFilter(1); }
+    }
+
+    public bool FilterNotesActive
+    {
+        get => _searchFilter == 2;
+        set { if (value) SetSearchFilter(2); }
+    }
+
+    public bool FilterOpenActive
+    {
+        get => _searchFilter == 3;
+        set { if (value) SetSearchFilter(3); }
+    }
+
+    public bool ShowSearchGuide => !HasSearchQuery;
+
+    public SearchHit? CurrentSearchHit => _currentSearchHit;
+
+    public void OpenSearch()
+    {
+        CloseTaskDetail();
+        if (_isSearching) return;
+        IsSearching = true;
+        RebuildSearch();
+    }
+
+    public void CloseSearch()
+    {
+        if (!_isSearching) return;
+        IsSearching = false;
+        SearchText = string.Empty;
+        SetCurrentHit(null);
+        RebuildSearch();
+    }
+
+    private void SetSearchFilter(int filter)
+    {
+        var value = Math.Clamp(filter, 0, 3);
+        if (_searchFilter == value) return;
+        _searchFilter = value;
+        OnPropertyChanged(nameof(FilterAllActive));
+        OnPropertyChanged(nameof(FilterTasksActive));
+        OnPropertyChanged(nameof(FilterNotesActive));
+        OnPropertyChanged(nameof(FilterOpenActive));
+        RebuildSearch();
+    }
+
+    private static string[] SearchTokens(string text) =>
+        text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+    private static bool Matches(string haystack, string[] tokens) =>
+        tokens.All(t => haystack.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0);
+
+    private static string TaskMeta(TaskItem task)
+    {
+        var tags = task.Tags.Count == 0 ? string.Empty : " · " + string.Join(" ", task.Tags);
+        return "任务" + tags + " · " + (task.DateCompleted != null ? "已完成" : "未完成");
+    }
+
+    private static string GroupLabel(string date, string today)
+    {
+        if (!DateOnly.TryParseExact(date, DateUtil.Format, CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var d)) return date;
+        var label = d.Month + " 月 " + d.Day + " 日";
+        if (date == today) return "今天 · " + label;
+        if (d == DateOnly.FromDateTime(DateTime.Today.AddDays(-1))) return "昨天 · " + label;
+        return label + " · " + WeekNames[(int)d.DayOfWeek];
+    }
+
+    private void RebuildSearch()
+    {
+        SearchResults.Clear();
+        SetCurrentHit(null);
+
+        var tokens = SearchTokens(_searchText);
+        if (!_isSearching || tokens.Length == 0)
+        {
+            NotifySearchChanged();
+            return;
+        }
+
+        var hits = new List<SearchHit>();
+        if (_searchFilter != 2)
+        {
+            foreach (var task in _data.Tasks)
+            {
+                if (_searchFilter == 3 && task.DateCompleted != null) continue;
+                if (!Matches(task.Title + " " + string.Join(" ", task.Tags), tokens)) continue;
+                var day = string.IsNullOrEmpty(task.DateCurrent) ? task.DateOrigin : task.DateCurrent;
+                hits.Add(new SearchHit(task.Id, day, task.Title, true, task.DateCompleted != null,
+                    TaskMeta(task), _searchText, OpenSearchHit));
+            }
+        }
+
+        if (_searchFilter != 1 && _searchFilter != 3)
+        {
+            foreach (var note in _data.Notes)
+            {
+                if (!Matches(note.Text, tokens)) continue;
+                var time = note.CreatedAt.Length >= 5 ? note.CreatedAt.Substring(0, 5) : note.CreatedAt;
+                hits.Add(new SearchHit(note.Id, note.Date, note.Text, false, false,
+                    "随记 · " + time, _searchText, OpenSearchHit));
+            }
+        }
+
+        var today = DateUtil.Today();
+        foreach (var group in hits.GroupBy(h => h.Date, StringComparer.Ordinal)
+                     .OrderByDescending(g => g.Key, StringComparer.Ordinal))
+        {
+            SearchResults.Add(new SearchGroupHeader(GroupLabel(group.Key, today), group.Count()));
+            foreach (var hit in group.OrderByDescending(h => h.IsTask)
+                         .ThenBy(h => h.Text, StringComparer.Ordinal))
+                SearchResults.Add(hit);
+        }
+
+        NotifySearchChanged();
+    }
+
+    private void NotifySearchChanged()
+    {
+        OnPropertyChanged(nameof(SearchHitCount));
+        OnPropertyChanged(nameof(SearchSummaryText));
+        OnPropertyChanged(nameof(HasSearchQuery));
+        OnPropertyChanged(nameof(HasNoSearchHits));
+        OnPropertyChanged(nameof(ShowSearchGuide));
+    }
+
+    private void SetCurrentHit(SearchHit? hit)
+    {
+        if (ReferenceEquals(_currentSearchHit, hit)) return;
+        _currentSearchHit?.SetCurrent(false);
+        _currentSearchHit = hit;
+        hit?.SetCurrent(true);
+        OnPropertyChanged(nameof(CurrentSearchHit));
+    }
+
+    /// <summary>Moves the keyboard cursor over hits, skipping date headers.</summary>
+    public SearchHit? MoveSearchSelection(int delta)
+    {
+        var hits = SearchResults.OfType<SearchHit>().ToList();
+        if (hits.Count == 0) return null;
+        var index = _currentSearchHit == null ? (delta > 0 ? -1 : 0) : hits.IndexOf(_currentSearchHit);
+        if (index < 0) index = 0;
+        var next = hits[Math.Clamp(index + delta, 0, hits.Count - 1)];
+        SetCurrentHit(next);
+        return next;
+    }
+
+    private void OpenSearchHit(SearchHit? hit)
+    {
+        if (hit == null) return;
+        var task = hit.IsTask ? _data.Tasks.FirstOrDefault(t => t.Id == hit.Id) : null;
+        var note = hit.IsTask ? null : _data.Notes.FirstOrDefault(n => n.Id == hit.Id);
+        if (task == null && note == null) return;
+        if (!DateOnly.TryParseExact(hit.Date, DateUtil.Format, CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var day)) return;
+
+        CloseSearch();
+        ShowTab(!hit.IsTask);
+        SetSelectedDate(day.ToDateTime(TimeOnly.MinValue));
+        SearchHitOpened?.Invoke(hit);
+    }
+
     internal static SolidColorBrush MakeBrush(string hex)
     {
         var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
         brush.Freeze();
         return brush;
+    }
+}
+
+public abstract class SearchResultItem : ObservableObject { }
+
+/// <summary>A date divider inside the search results. Never clickable.</summary>
+public sealed class SearchGroupHeader : SearchResultItem
+{
+    public SearchGroupHeader(string text, int count)
+    {
+        Text = text;
+        CountText = count + " 条";
+    }
+
+    public string Text { get; }
+    public string CountText { get; }
+}
+
+/// <summary>One cross-day hit. Read-only: jumping happens in the original day view.</summary>
+public sealed class SearchHit : SearchResultItem
+{
+    private static readonly Brush TaskBrush = MainViewModel.MakeBrush("#378ADD");
+    private static readonly Brush NoteBrush = MainViewModel.MakeBrush("#B4B2A9");
+    private static readonly Brush DoneBrush = MainViewModel.MakeBrush("#E8E6E0");
+
+    private readonly Action<SearchHit> _open;
+    private bool _isCurrent;
+
+    public SearchHit(Guid id, string date, string text, bool isTask, bool isDone,
+        string meta, string query, Action<SearchHit> open)
+    {
+        Id = id;
+        Date = date;
+        Text = text;
+        IsTask = isTask;
+        IsDone = isDone;
+        MetaText = meta;
+        Query = query;
+        _open = open;
+        OpenCommand = new RelayCommand(_ => _open(this));
+    }
+
+    public Guid Id { get; }
+    public string Date { get; }
+    public string Text { get; }
+    public string Query { get; }
+    public bool IsTask { get; }
+    public bool IsDone { get; }
+    public string MetaText { get; }
+    public ICommand OpenCommand { get; }
+    public Brush BarBrush => IsTask ? (IsDone ? DoneBrush : TaskBrush) : NoteBrush;
+    public bool IsCurrent => _isCurrent;
+
+    internal void SetCurrent(bool value)
+    {
+        if (Set(ref _isCurrent, value)) OnPropertyChanged(nameof(IsCurrent));
     }
 }
 
@@ -974,9 +1349,12 @@ public sealed class NoteRowViewModel : ObservableObject
     private readonly Action<NoteItem> _delete;
     private readonly Action<NoteItem> _quote;
     private bool _isExpanded;
+    private bool _canFold;
 
     public NoteRowViewModel(NoteItem model, bool canEdit,
         Func<NoteReference, string> resolve,
+        Func<NoteTaskReference, (string Text, string Day)> resolveTask,
+        Action<NoteTaskReference> openTask,
         Action<NoteItem> edit, Action<NoteItem> delete,
         Action<NoteItem> quote, Action<string> openQuote)
     {
@@ -990,16 +1368,27 @@ public sealed class NoteRowViewModel : ObservableObject
         DeleteCommand = new RelayCommand(_ => _delete(Model), _ => CanEdit);
         QuoteCommand = new RelayCommand(_ => _quote(Model));
 
-        CanFold = EstimateLines(model.Text) > 3;
+        // Seed only: the row is capped at three lines now, so the real answer comes from
+        // NoteFoldWatcher measuring the text at its rendered width.
+        _canFold = EstimateLines(model.Text) > 3;
         ToggleFoldCommand = new RelayCommand(_ =>
         {
             if (CanFold) IsExpanded = !IsExpanded;
         });
 
-        Quotes = model.References
+        Quotes = (model.References ?? new List<NoteReference>())
             .Where(r => r != null)
             .Select(r => new NoteQuoteDisplay(r, resolve(r),
                 new RelayCommand(_ => openQuote(r.Date))))
+            .ToList();
+
+        TaskLinks = (model.TaskRefs ?? new List<NoteTaskReference>())
+            .Where(r => r != null)
+            .Select(r =>
+            {
+                var (text, day) = resolveTask(r);
+                return new NoteTaskDisplay(r, text, day, new RelayCommand(_ => openTask(r)));
+            })
             .ToList();
     }
 
@@ -1017,8 +1406,21 @@ public sealed class NoteRowViewModel : ObservableObject
 
     public bool HasQuotes => Quotes.Count > 0;
 
-    /// <summary>Only long notes get a fold toggle.</summary>
-    public bool CanFold { get; }
+    /// <summary>Todos this note mentions with @. Clicking one opens the todo's own day.</summary>
+    public IReadOnlyList<NoteTaskDisplay> TaskLinks { get; }
+
+    public bool HasTaskLinks => TaskLinks.Count > 0;
+
+    /// <summary>Only notes taller than three lines get a fold toggle.</summary>
+    public bool CanFold => _canFold;
+
+    /// <summary>Called by the view's measuring pass; never set from the data layer.</summary>
+    internal void SetOverflows(bool value)
+    {
+        if (_canFold == value) return;
+        _canFold = value;
+        OnPropertyChanged(nameof(CanFold));
+    }
 
     public bool IsExpanded
     {
@@ -1040,11 +1442,60 @@ public sealed class NoteRowViewModel : ObservableObject
     public ICommand DeleteCommand { get; }
     public ICommand QuoteCommand { get; }
 
-    /// <summary>Rough line estimate for the card width; three lines or fewer stay open.</summary>
+    /// <summary>Rough line estimate used as a seed before the view has measured anything.</summary>
     private static int EstimateLines(string text)
     {
         const int charsPerLine = 24;
         return text.Split('\n')
             .Sum(line => Math.Max(1, (int)Math.Ceiling(line.Length / (double)charsPerLine)));
     }
+}
+
+/// <summary>One @mention chip under a note. Clicking it opens the mentioned todo.</summary>
+public sealed class NoteTaskDisplay : ObservableObject
+{
+    public NoteTaskDisplay(NoteTaskReference model, string text, string day, ICommand openCommand)
+    {
+        Model = model;
+        Text = text;
+        DayText = day;
+        OpenCommand = openCommand;
+    }
+
+    public NoteTaskReference Model { get; }
+    public string Text { get; }
+    public string DayText { get; }
+    public ICommand OpenCommand { get; }
+}
+
+/// <summary>One row of the @ popup: a todo from today or yesterday.</summary>
+public sealed class NoteMentionItem
+{
+    public NoteMentionItem(Guid taskId, string date, string title, bool isDone)
+    {
+        TaskId = taskId;
+        Date = date;
+        Title = title;
+        IsDone = isDone;
+    }
+
+    public Guid TaskId { get; }
+
+    /// <summary>Day the todo was found on: today or yesterday.</summary>
+    public string Date { get; }
+
+    public string Title { get; }
+
+    public bool IsDone { get; }
+
+    public string DayText => Date == DateUtil.Today()
+        ? "今天"
+        : Date == DateUtil.From(DateTime.Today.AddDays(-1))
+            ? "昨天"
+            : Date;
+
+    public string StateText => IsDone ? "已完成" : "未完成";
+
+    /// <summary>Right-hand label in the popup row.</summary>
+    public string DetailText => DayText + " · " + StateText;
 }

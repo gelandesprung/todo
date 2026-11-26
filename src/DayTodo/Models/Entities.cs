@@ -18,6 +18,23 @@ public sealed class NoteItem
 
     /// <summary>Other notes this one points at. Text is a snapshot fallback.</summary>
     public List<NoteReference> References { get; set; } = new();
+
+    /// <summary>Tasks this note mentions with @. Title is a snapshot fallback.</summary>
+    public List<NoteTaskReference> TaskRefs { get; set; } = new();
+}
+
+/// <summary>
+/// An @mention of a todo inside a note. Only yesterday's and today's tasks can be
+/// mentioned; the title is kept so the chip still reads well if the task is deleted.
+/// </summary>
+public sealed class NoteTaskReference
+{
+    /// <summary>Day the task was picked from.</summary>
+    public string Date { get; set; } = string.Empty;
+
+    public Guid TaskId { get; set; }
+
+    public string Title { get; set; } = string.Empty;
 }
 
 /// <summary>

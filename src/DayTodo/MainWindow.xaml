@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:DayTodo.ViewModels"
         xmlns:views="clr-namespace:DayTodo.Views"
+        xmlns:local="clr-namespace:DayTodo"
         Title="DayTodo 日清单"
         Width="980" Height="680" MinWidth="780" MinHeight="540"
         WindowStyle="None" ResizeMode="CanResize"
@@ -16,8 +17,80 @@
     </WindowChrome.WindowChrome>
 
     <Window.Resources>
+        <local:EmptyTextToVisibilityConverter x:Key="EmptyTextVis" />
+
+        <!-- 搜索结果：日期分隔行 -->
+        <DataTemplate DataType="{x:Type vm:SearchGroupHeader}">
+            <Grid Margin="0,12,0,5">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding Text}" FontSize="11.5" Foreground="{StaticResource TextMuted}" />
+                    <TextBlock Text="{Binding CountText}" FontSize="11" Margin="8,0,0,0"
+                               Foreground="{StaticResource TextMuted}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 搜索结果：只读命中行，跳转按钮走原始日期视图 -->
+        <DataTemplate DataType="{x:Type vm:SearchHit}">
+            <Border Background="#FFFFFF" BorderBrush="#E8E6E0" BorderThickness="0.5"
+                    CornerRadius="8" Padding="9,8">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                <Setter Property="Background" Value="#F5F9FE" />
+                                <Setter Property="BorderBrush" Value="#85B7EB" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="3" CornerRadius="1.5" Margin="0,1,10,1"
+                            Background="{Binding BarBrush}" />
+                    <StackPanel Grid.Column="1" Margin="0,0,10,0" VerticalAlignment="Center"
+                                Cursor="Hand" PreviewMouseLeftButtonDown="SearchHit_Click">
+                        <TextBlock FontSize="12.5" Foreground="{StaticResource TextPrimary}"
+                                   TextTrimming="CharacterEllipsis"
+                                   local:SearchHighlight.Text="{Binding Text}"
+                                   local:SearchHighlight.Query="{Binding Query}" />
+                        <TextBlock Text="{Binding MetaText}" FontSize="10.5" Margin="0,4,0,0"
+                                   Foreground="{StaticResource TextMuted}" />
+                    </StackPanel>
+                    <Button Grid.Column="2" Content="跳转" Style="{StaticResource LinkButton}"
+                            Command="{Binding OpenCommand}" VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <Style x:Key="SearchChip" TargetType="RadioButton">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#5F5E5A" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Chip" Background="#F1EFE8" CornerRadius="4" Padding="9,4"
+                                Cursor="Hand">
+                            <TextBlock Text="{TemplateBinding Content}" FontSize="11"
+                                       Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Chip" Property="Background" Value="#E6F1FB" />
+                                <Setter Property="Foreground" Value="#185FA5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <DataTemplate DataType="{x:Type vm:TaskRowViewModel}">
-            <Border Background="#FFFFFF" BorderBrush="{StaticResource LineBrush}" BorderThickness="0.5"
+            <Border x:Name="RowCard" Background="#FFFFFF" BorderBrush="{StaticResource LineBrush}" BorderThickness="0.5"
                     CornerRadius="8" Padding="10,9" SnapsToDevicePixels="True">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -142,10 +215,11 @@
             </Border>
         </DataTemplate>
         <DataTemplate DataType="{x:Type vm:NoteRowViewModel}">
-            <Border Background="#FFFFFF" BorderBrush="{StaticResource LineBrush}" BorderThickness="0.5"
+            <Border x:Name="RowCard" Background="#FFFFFF" BorderBrush="{StaticResource LineBrush}" BorderThickness="0.5"
                     CornerRadius="8" Padding="12,10" SnapsToDevicePixels="True">
                 <Grid>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
@@ -155,14 +229,28 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding Time}" FontSize="11"
-                               Foreground="{StaticResource TextMuted}" />
+                    <!-- 折叠开关留在正文列内：放进右侧按钮列会改变正文宽度，
+                         测量出来的「是否超过三行」就会随按钮出现而翻转。 -->
+                    <Grid Grid.Row="0" Grid.Column="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{Binding Time}" FontSize="11"
+                                   Foreground="{StaticResource TextMuted}" />
+                        <Button Grid.Column="1" Content="{Binding FoldText}" Style="{StaticResource LinkButton}"
+                                Command="{Binding ToggleFoldCommand}" Margin="0,-2,0,0"
+                                ToolTip="长随记折叠为三行，点击展开或收起"
+                                Visibility="{Binding CanFold, Converter={StaticResource BoolVis}}" />
+                    </Grid>
 
-                    <!-- Long notes stay at roughly three lines until opened. -->
+                    <!-- Capped, not fixed: a short note stays one or two lines tall. -->
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding Text}" FontSize="12.5"
                                Foreground="{StaticResource TextPrimary}" TextWrapping="Wrap"
-                               TextTrimming="CharacterEllipsis" Height="57" VerticalAlignment="Top"
+                               TextTrimming="CharacterEllipsis" MaxHeight="57" VerticalAlignment="Top"
                                Margin="0,6,0,0" LineHeight="19"
+                               views:NoteFoldWatcher.Monitor="True"
+                               views:NoteFoldWatcher.MaxVisibleHeight="57"
                                Visibility="{Binding IsCollapsed, Converter={StaticResource BoolVis}}" />
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding Text}" FontSize="12.5"
                                Foreground="{StaticResource TextPrimary}" TextWrapping="Wrap"
@@ -198,12 +286,38 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <StackPanel Grid.Row="0" Grid.Column="1" Grid.RowSpan="3" Orientation="Horizontal"
+                    <!-- @ 引用的待办：与引用随记同一行式，但用中性色区分。 -->
+                    <ItemsControl Grid.Row="3" Grid.Column="0" ItemsSource="{Binding TaskLinks}"
+                                  Margin="0,9,0,0"
+                                  Visibility="{Binding HasTaskLinks, Converter={StaticResource BoolVis}}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#F1EFE8" CornerRadius="4"
+                                        Padding="7,3" Margin="0,0,6,4">
+                                    <Button Style="{StaticResource QuoteChipButton}"
+                                            Command="{Binding OpenCommand}"
+                                            ToolTip="跳到这条待办所在的那一天">
+                                        <TextBlock FontSize="10.5" Foreground="#5F5E5A">
+                                            <TextBlock.Text>
+                                                <MultiBinding StringFormat="{}待办 {0} · {1}">
+                                                    <Binding Path="DayText" />
+                                                    <Binding Path="Text" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                    </Button>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <StackPanel Grid.Row="0" Grid.Column="1" Grid.RowSpan="4" Orientation="Horizontal"
                                 VerticalAlignment="Top" Margin="10,0,0,0">
-                        <Button Content="{Binding FoldText}" Style="{StaticResource LinkButton}"
-                                Command="{Binding ToggleFoldCommand}" Margin="0,0,8,0"
-                                ToolTip="长随记折叠为三行，点击展开或收起"
-                                Visibility="{Binding CanFold, Converter={StaticResource BoolVis}}" />
                         <Button Content="引用" Style="{StaticResource RowActionButton}"
                                 Command="{Binding QuoteCommand}" ToolTip="跳回今天，把这条随记放进引用" />
                         <Button Content="编辑" Style="{StaticResource RowActionButton}" Margin="6,0,0,0"
@@ -391,6 +505,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <StackPanel>
                             <Button Content="任务" Style="{StaticResource TabButton}"
@@ -408,6 +523,35 @@
                                         Visibility="{Binding IsNotesTab, Converter={StaticResource BoolVis}}" />
                             </Grid>
                         </StackPanel>
+
+                        <!-- 常驻搜索入口：聚焦即进入搜索，Ctrl+F 也能到这里 -->
+                        <Border Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Width="200" Height="30" Background="#FFFFFF"
+                                BorderBrush="#DCDAD2" BorderThickness="0.5" CornerRadius="6"
+                                Margin="0,2,0,0">
+                            <Grid Margin="8,0,6,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Path Grid.Column="0" Width="12" Height="12" Stretch="Uniform"
+                                      Stroke="#888780" StrokeThickness="1.3"
+                                      Data="M6,1 A5,5 0 1,1 6,11 A5,5 0 1,1 6,1 Z M9.5,9.5 L13,13" />
+                                <TextBox x:Name="SearchBox" Grid.Column="1" Margin="7,0,4,0"
+                                         Style="{StaticResource PlainTextBox}" FontSize="11.5"
+                                         Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                         GotFocus="SearchBox_GotFocus"
+                                         ToolTip="搜索任务与随记（Ctrl+F）" />
+                                <TextBlock Grid.Column="1" Text="搜索任务 / 随记" FontSize="11.5"
+                                           Foreground="#888780" IsHitTestVisible="False"
+                                           VerticalAlignment="Center" Margin="7,0,4,0"
+                                           Visibility="{Binding SearchText, Converter={StaticResource EmptyTextVis}}" />
+                                <Button Grid.Column="2" Content="×" Style="{StaticResource LinkButton}"
+                                        FontSize="13" Padding="2,0" Command="{Binding CloseSearchCommand}"
+                                        ToolTip="退出搜索" />
+                            </Grid>
+                        </Border>
                     </Grid>
 
                     <StackPanel Grid.Row="1" Margin="20,8,20,0">
@@ -613,8 +757,11 @@
                                                  AcceptsReturn="True" FontSize="12.5"
                                                  Text="{Binding NewNoteText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                  PreviewKeyDown="NoteBox_KeyDown"
-                                                 ToolTip="随手记下想法，回车保存，Shift+Enter 换行" />
-                                        <TextBlock Text="随手记下现在的想法…" FontSize="12.5" Margin="13,10,0,0"
+                                                 TextChanged="NoteBox_TextChanged"
+                                                 PreviewMouseDown="NoteBox_PreviewMouseDown"
+                                                 LostKeyboardFocus="NoteBox_LostKeyboardFocus"
+                                                 ToolTip="随手记下想法，回车保存，Shift+Enter 换行，输入 @ 引用今天或昨天的待办" />
+                                        <TextBlock Text="随手记下现在的想法…输入 @ 可引用今天或昨天的待办" FontSize="12.5" Margin="13,10,0,0"
                                                    Foreground="{StaticResource TextMuted}" IsHitTestVisible="False"
                                                    HorizontalAlignment="Left" VerticalAlignment="Top"
                                                    Visibility="{Binding NoteHintVisible, Converter={StaticResource BoolVis}}" />
@@ -627,7 +774,7 @@
 
                                 <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
                                             Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
-                                    <TextBlock Text="Enter 保存 · Shift+Enter 换行" FontSize="10.5"
+                                    <TextBlock Text="Enter 保存 · Shift+Enter 换行 · @ 引用待办" FontSize="10.5"
                                                Foreground="{StaticResource TextMuted}" />
                                     <TextBlock Text="{Binding PendingQuoteText}" FontSize="10.5" Margin="16,0,0,0"
                                                Foreground="{StaticResource AccentDark}"
@@ -642,7 +789,134 @@
                                        Foreground="{StaticResource TextMuted}"
                                        Text="{Binding NoteReadOnlyText}"
                                        Visibility="{Binding NoteReadOnlyVisible, Converter={StaticResource BoolVis}}" />
+
+                            <!-- @ 引用弹层：只列今天和昨天的待办，键盘上下选、回车确认。 -->
+                            <Popup x:Name="MentionPopup" PlacementTarget="{Binding ElementName=NoteBox}"
+                                   Placement="Top" VerticalOffset="-6" StaysOpen="True"
+                                   AllowsTransparency="True" PopupAnimation="Fade">
+                                <Border x:Name="MentionPanel" Background="#FFFFFF" BorderBrush="#DCDAD2"
+                                        BorderThickness="1" CornerRadius="6" Padding="4" Width="360">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.12"
+                                                          Color="#2C2C2A" />
+                                    </Border.Effect>
+                                    <StackPanel>
+                                        <TextBlock Text="引用今天或昨天的待办" FontSize="10.5"
+                                                   Foreground="{StaticResource TextMuted}" Margin="7,4,7,6" />
+                                        <ListBox x:Name="MentionList" Background="Transparent"
+                                                 BorderThickness="0" MaxHeight="212"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 MouseLeftButtonUp="MentionList_MouseLeftButtonUp">
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="Padding" Value="0" />
+                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                                    <Setter Property="Focusable" Value="False" />
+                                                    <Setter Property="Template">
+                                                        <Setter.Value>
+                                                            <ControlTemplate TargetType="ListBoxItem">
+                                                                <Border x:Name="Row" Background="Transparent"
+                                                                        CornerRadius="4">
+                                                                    <ContentPresenter />
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Row" Property="Background"
+                                                                                Value="#F6F5F1" />
+                                                                    </Trigger>
+                                                                    <Trigger Property="IsSelected" Value="True">
+                                                                        <Setter TargetName="Row" Property="Background"
+                                                                                Value="{StaticResource AccentLight}" />
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="8,6">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding Title}"
+                                                                   FontSize="12" TextTrimming="CharacterEllipsis"
+                                                                   Foreground="{StaticResource TextPrimary}" />
+                                                        <TextBlock Grid.Column="1" Text="{Binding DetailText}"
+                                                                   FontSize="10.5" Margin="10,0,0,0"
+                                                                   Foreground="{StaticResource TextMuted}" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
                         </Grid>
+                    </Grid>
+
+                    <!-- 搜索覆盖层：日期头、列表、编辑区都被盖住，标签行和搜索框保留 -->
+                    <Grid x:Name="SearchLayer" Grid.Row="1" Grid.RowSpan="3" Panel.ZIndex="20"
+                          Background="#FFFFFF"
+                          Visibility="{Binding IsSearching, Converter={StaticResource BoolVis}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0" Margin="20,12,20,0" Orientation="Horizontal">
+                            <TextBlock Text="{Binding SearchSummaryText}" FontSize="14" FontWeight="Medium"
+                                       Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" />
+                            <TextBlock Text="Esc 退出" FontSize="10.5" Margin="12,0,0,0"
+                                       Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="1" Margin="20,12,20,0" Orientation="Horizontal">
+                            <RadioButton Content="全部" Style="{StaticResource SearchChip}" GroupName="SearchFilter"
+                                         IsChecked="{Binding FilterAllActive}" />
+                            <RadioButton Content="任务" Style="{StaticResource SearchChip}" GroupName="SearchFilter"
+                                         Margin="6,0,0,0" IsChecked="{Binding FilterTasksActive}" />
+                            <RadioButton Content="随记" Style="{StaticResource SearchChip}" GroupName="SearchFilter"
+                                         Margin="6,0,0,0" IsChecked="{Binding FilterNotesActive}" />
+                            <RadioButton Content="只看未完成" Style="{StaticResource SearchChip}" GroupName="SearchFilter"
+                                         Margin="6,0,0,0" IsChecked="{Binding FilterOpenActive}" />
+                        </StackPanel>
+
+                        <Grid Grid.Row="2" Margin="20,12,20,8">
+                            <ListBox x:Name="SearchList" ItemsSource="{Binding SearchResults}"
+                                     ItemContainerStyle="{StaticResource TaskListItem}"
+                                     Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        Visibility="{Binding HasNoSearchHits, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="没有找到匹配的内容" FontSize="13"
+                                           Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center" />
+                                <TextBlock Text="换个关键词，或放宽筛选条件" FontSize="11.5"
+                                           Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center"
+                                           Margin="0,5,0,0" />
+                            </StackPanel>
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        Visibility="{Binding ShowSearchGuide, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="输入关键词，翻遍所有日期" FontSize="13"
+                                           Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center" />
+                                <TextBlock Text="任务标题与标签、随记正文 · 空格分隔多个词" FontSize="11.5"
+                                           Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center"
+                                           Margin="0,5,0,0" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Border Grid.Row="3" Background="#FCFCFB" MinHeight="32">
+                            <Grid>
+                                <Border Height="0.5" VerticalAlignment="Top" Background="#E8E6E0" />
+                                <TextBlock Text="↑↓ 选择 · Enter 跳转 · Esc 退出搜索" FontSize="10.5"
+                                           Foreground="{StaticResource TextMuted}" Margin="20,9" />
+                            </Grid>
+                        </Border>
                     </Grid>
                 </Grid>
             </Grid>
